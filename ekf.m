@@ -36,15 +36,21 @@ end
 %% Process Noise (Motion Model Uncertainty)
 
 % For EKF (in odometry space: Δd, Δβ)
-Q = [
-    0.01^2, 0;   % Distance increment noise [m]
-    0, 0.02^2    % Heading increment noise [rad]
-];
+process_noise_d = 0.01;      % Distance increment noise [m]
+process_noise_beta = 0.02;   % Heading increment noise [rad]
+Q = [process_noise_d^2, 0;
+     0, process_noise_beta^2];
+
+% Pre-compute standard deviations for efficiency
+Q_std = sqrt(diag(Q));
 
 %% Measurement Noise (Sensor Uncertainty)
 
 measurement_noise_std = 0.05;  % Bearing measurement noise [rad]
 R = measurement_noise_std^2 * eye(3);  % 3 beacons
+
+% Pre-compute standard deviations for efficiency
+R_std = sqrt(diag(R));
 
 %% Beacon Positions
 beacons = [
@@ -85,7 +91,7 @@ for step = 1:num_steps
     phi = steering_profile(step);
 
     % Ackermann dynamics: compute angular velocity (no noise - perfect execution)
-    omega = (v / L) * tan(phi);
+    omega = (v / L) * tan(phi);  % vL/tan(φ)
 
     % Use trapezoidal method to integrate with more accuracy
     theta_k = true_state(3);
@@ -98,34 +104,29 @@ for step = 1:num_steps
         theta_k1
     ];
 
-    %% Compute Odometry Measurements [Δd, Δβ] from true motion
+    %% Compute Odometry Measurements [Δd, Δβ] from true motion - Vectorized
     % This is what the EKF actually observes (with noise)
-    delta_x = true_state(1) - prev_state(1);
-    delta_y = true_state(2) - prev_state(2);
-    actual_delta_d = sqrt(delta_x^2 + delta_y^2);
-    actual_delta_beta = true_state(3) - prev_state(3);
+    state_delta = true_state - prev_state;
+    actual_control = [norm(state_delta(1:2)); state_delta(3)];
 
-    % Add odometry measurement noise
-    measured_delta_d = actual_delta_d + sqrt(Q(1,1)) * randn;
-    measured_delta_beta = actual_delta_beta + sqrt(Q(2,2)) * randn;
-
-    % This is what the EKF receives
-    noisy_control = [measured_delta_d; measured_delta_beta];
+    % Add odometry measurement noise (vectorized)
+    noisy_control = actual_control + Q_std .* randn(2, 1);
     control_history(:, step) = noisy_control;
 
     true_trajectory(:, step) = true_state;
 
-    %% Generate Measurements (Bearing to each beacon)
-    measurements = zeros(num_beacons, 1);
-    for b = 1:num_beacons
-        % True bearing angle with noise
-        true_bearing = atan2(beacons(b,2) - true_state(2), beacons(b,1) - true_state(1));
-        relative_bearing = true_bearing - true_state(3);
-        measurements(b) = relative_bearing + sqrt(R(b,b)) * randn;
+    %% Generate Measurements (Bearing to each beacon) - Vectorized
+    % Compute all bearings at once
+    dx_beacons = beacons(:,1) - true_state(1);
+    dy_beacons = beacons(:,2) - true_state(2);
+    true_bearings = atan2(dy_beacons, dx_beacons);
+    relative_bearings = true_bearings - true_state(3);
 
-        % Normalize to [-pi, pi]
-        measurements(b) = atan2(sin(measurements(b)), cos(measurements(b)));
-    end
+    % Add measurement noise (using pre-computed R_std)
+    measurements = relative_bearings + R_std .* randn(num_beacons, 1);
+
+    % Normalize to [-pi, pi]
+    measurements = atan2(sin(measurements), cos(measurements));
 
     %% EKF PREDICTION STEP
     % Control input: u = [Δd, Δβ]
@@ -162,35 +163,25 @@ for step = 1:num_steps
     % Predict covariance
     P_predicted = A * P * A' + W * Q * W';
 
-    %% EKF UPDATE STEP
-    % Predict measurements
-    predicted_measurements = zeros(num_beacons, 1);
-    H = zeros(num_beacons, 3);  % Measurement Jacobian
+    %% EKF UPDATE STEP - Vectorized
+    % Compute all predicted measurements at once
+    dx_pred = beacons(:,1) - predicted_state(1);
+    dy_pred = beacons(:,2) - predicted_state(2);
+    dist_sq = dx_pred.^2 + dy_pred.^2;
 
-    for b = 1:num_beacons
-        dx = beacons(b,1) - predicted_state(1);
-        dy = beacons(b,2) - predicted_state(2);
-        dist_sq = dx^2 + dy^2;
+    % Predicted bearings
+    predicted_bearings = atan2(dy_pred, dx_pred);
+    predicted_measurements = predicted_bearings - predicted_state(3);
 
-        % Predicted bearing
-        predicted_bearing = atan2(dy, dx);
-        predicted_measurements(b) = predicted_bearing - predicted_state(3);
+    % Normalize to [-pi, pi]
+    predicted_measurements = atan2(sin(predicted_measurements), cos(predicted_measurements));
 
-        % Normalize to [-pi, pi]
-        predicted_measurements(b) = atan2(sin(predicted_measurements(b)), ...
-                                         cos(predicted_measurements(b)));
+    % Measurement Jacobian (all rows at once)
+    H = [dy_pred ./ dist_sq, -dx_pred ./ dist_sq, -ones(num_beacons, 1)];
 
-        % Jacobian row for this beacon
-        H(b, :) = [dy/dist_sq, -dx/dist_sq, -1];
-    end
-
-    % Innovation (measurement residual)
+    % Innovation (measurement residual) with angle normalization
     innovation = measurements - predicted_measurements;
-
-    % Normalize innovation angles to [-pi, pi]
-    for b = 1:num_beacons
-        innovation(b) = atan2(sin(innovation(b)), cos(innovation(b)));
-    end
+    innovation = atan2(sin(innovation), cos(innovation));
 
     % Innovation covariance
     S = H * P_predicted * H' + R;
