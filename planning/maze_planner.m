@@ -1,0 +1,152 @@
+function [planner, start, goal, waypoints, traj] = maze_planner(filename, map, inflate)
+%MAZE_PLANNER - Path planning for maze navigation using Hybrid A*
+%   Computes a collision-free reference path from START to GOAL positions
+%   defined in an XML world file using Hybrid A* algorithm on an occupancy
+%   map.
+%
+% Input Arguments:
+%   filename (string)    - Path to XML world file containing START and GOAL markers
+%   map (H x W x C)      - Binary or grayscale image map (only first channel used)
+%   inflate (double)     - Obstacle inflation radius [m] (default: 0.3)
+%
+% Output Arguments:
+%   planner (plannerHybridAStar) - Configured Hybrid A* planner object
+%   start (1x3)                  - Start pose [x, y, theta] in world frame [m, m, rad]
+%   goal (1x3)                   - Goal pose [x, y, theta] in world frame [m, m, rad]
+%   waypoints (Nx3)              - Waypoints along the planned path [x, y, theta]
+%   traj (navPath)            - Planned path object containing states and directions
+%
+% Example:
+%   map = imread('maze.png');
+%   [planner, start, goal, path] = maze_planner('world.xml', map);
+%   show(path);
+
+arguments
+    filename {mustBeTextScalar}
+    map (:,:,:) {mustBeNumeric}
+    inflate (1,1) double {mustBeNonnegative, mustBeFinite} = 0.3
+end
+
+%% Parse World XML File
+worldxml = readstruct(filename, "FileType", "xml");
+
+start = zeros(1, 3);
+goal = zeros(1, 3);
+waypoints = [];
+it = 1;
+
+% Extract START and GOAL poses from cylindrical parts
+if isfield(worldxml.World,'CylindricalPart')
+for i = 1:size(worldxml.World.CylindricalPart, 2)
+    part = worldxml.World.CylindricalPart(i);
+
+    % Extract position coordinates {x, y, z}
+    coords = double(split(extractBetween(part.position, "{", "}"), ","));
+
+    % Extract orientation {roll, pitch, yaw}
+    if isa(part.orientation, 'string')
+        orient = split(extractBetween(part.orientation, "{", "}"), ",");
+    else
+        orient = [0, 0, 0];
+    end
+
+    % Assign to start or goal based on name attribute
+    if part.nameAttribute == "START"
+        start = [coords(1), coords(2), double(orient(3))];
+    elseif part.nameAttribute == "GOAL"
+        goal = [coords(1), coords(2), double(orient(3))];
+    elseif part.nameAttribute.startsWith("WAYPOINT")
+        waypointNum = worldxml.World.CylindricalPart(i).nameAttribute.replace("WAYPOINT","");
+        waypoints(it,:) = [coords(1),coords(2),double(orient(3)),double(waypointNum)];
+        it=it+1;
+    end
+end
+else
+    display('No cylinder parts!')
+end
+it = 1;
+% Waypoints based on statues
+if size(waypoints,1) < 1
+    for i = 1:size(worldxml.World.MeshPart, 2)
+        part = worldxml.World.MeshPart(i);
+        if isa(part.position, 'string')
+            coords = double(split(extractBetween(part.position, "{", "}"), ","));
+        end
+        if isa(part.orientation, 'string')
+            orient = split(extractBetween(part.orientation, "{", "}"), ",");
+        else
+            orient = [0, 0, 0];
+        end
+        if part.nameAttribute.startsWith("death")
+            LM = part.nameAttribute.split('-');LM = LM(2);
+            waypointNum = LM.replace("LM","");
+            ang = rad2deg(double(orient(3)));
+            if ang < 0
+                ang = 360 + ang;
+            end
+            if ang < 15 || ang > 345 % Looking up
+                coords(2) = coords(2)+6.5; 
+            elseif ang < 195 && ang > 165 % Looking down
+                coords(2) = coords(2)-6.5;
+            elseif ang > 255 && ang < 285 % Looking right
+                coords(1) = coords(1)+6.5; 
+            elseif ang > 75 && ang < 105 % Looking left
+                coords(1) = coords(1)-6.5;
+            end
+            waypoints(it,:) = [coords(1),coords(2),double(orient(3))-pi/2,double(waypointNum)];
+            it=it+1;
+        end
+    end
+end
+
+clear it waypointNum orient coords;
+waypoints = sortrows(waypoints,4);
+
+%% Configure State Space and Validator
+% SE(2) state space: [x, y, theta]
+state_space = stateSpaceSE2;
+state_validator = validatorOccupancyMap(state_space);
+
+% Create binary occupancy map from image (rotate 180° for coordinate alignment)
+occupancy_map = binaryOccupancyMap(imrotate(map(:,:,1), 180), "Resolution", 10);
+occupancy_map.inflate(inflate);
+
+% Configure validator
+state_validator.Map = occupancy_map;
+state_validator.ValidationDistance = 0.1;
+
+% Set state bounds based on map limits
+state_space.StateBounds = [
+    occupancy_map.XWorldLimits;
+    occupancy_map.YWorldLimits;
+    [-pi pi]
+];
+
+%% Compute Reference Trajectory
+
+% Hybrid A* planner for car-like robots
+planner = plannerHybridAStar(state_validator,"MinTurningRadius",1.6);
+if size(waypoints,1) < 1
+    refpath = plan(planner,start,goal,"SearchMode","exhaustive"); %refpath.States has the traj coordinates
+    traj = refpath.States;
+else
+    if start == zeros(1, 3)
+        disp('Using waypoint 1 as start');
+        start = waypoints(1,1:3); waypoints = waypoints(2:end,:);
+    end
+    if goal == zeros(1, 3)
+        disp('Using last waypoint as goal');
+        goal = waypoints(end,1:3); waypoints = waypoints(1:end-1,:);
+    end
+    refpath = plan(planner,start,waypoints(1,1:3),"SearchMode","greedy");
+    traj = refpath.States;
+    disp('Traj. from start to waypoint 1 done...');
+    for i=1:size(waypoints,1)-1
+        refpath = plan(planner,waypoints(i,1:3),waypoints(i+1,1:3),"SearchMode","greedy");
+        traj = [traj; refpath.States];
+        disp('Traj. from waypoint to waypoint done...');
+    end
+    refpath = plan(planner,waypoints(size(waypoints,1),1:3),goal,"SearchMode","greedy");
+    traj = [traj; refpath.States];
+end
+end
