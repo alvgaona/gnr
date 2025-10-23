@@ -1,4 +1,4 @@
-%% Extended Kalman Filter with Ackermann Model
+%% Extended Kalman Filter with Differential Drive Model
 % Control input: [Δd, Δβ] where Δd is distance traveled and Δβ is heading change
 % This is typical for odometry-based systems
 
@@ -7,7 +7,7 @@ close all;
 clc;
 
 %% Vehicle and Simulation Parameters
-L = 2.5;                    % Wheelbase length [m]
+b = 0.5;                    % Track width (wheel separation) [m]
 time_step = 0.2;            % Discrete time step [s]
 simulation_time = 20;       % Total simulation time [s]
 num_steps = simulation_time / time_step;
@@ -19,17 +19,17 @@ trajectory_type = 'curve';  % Options: 'linear', 'circular', 'curve'
 switch trajectory_type
     case 'linear'
         % Linear trajectory
-        velocity_profile = 2.0 * ones(1, num_steps); % Constant 2 m/s
-        steering_profile = 0.0 * ones(1, num_steps); % Zero steering
+        velocity_profile = 2.0 * ones(1, num_steps);        % Constant 2 m/s
+        angular_velocity_profile = 0.0 * ones(1, num_steps); % Zero rotation
     case 'circular'
         % Circular/Arc trajectory
         velocity_profile = 1.0 * ones(1, num_steps); % Constant 1 m/s
         radius = 5; % 5m radius
-        steering_profile = atan(L/radius) * ones(1, num_steps); % Constant steering
+        angular_velocity_profile = (velocity_profile / radius); % Constant angular velocity
     case 'curve'
-        % Curved path with varying steering
+        % Curved path with varying angular velocity
         velocity_profile = 1.5 * ones(1, num_steps); % Constant 1.5 m/s
-        steering_profile = 0.1 * sin(2*pi*(0:num_steps-1)/num_steps); % Sinusoidal steering
+        angular_velocity_profile = 0.2 * sin(2*pi*(0:num_steps-1)/num_steps); % Sinusoidal rotation [rad/s]
 end
 
 
@@ -80,18 +80,18 @@ control_history = zeros(2, num_steps);
 %% Main Simulation Loop
 
 for step = 1:num_steps
-    % 1. Simulate ground truth robot motion: Ackermann model with velocity
-    % and steering angle as control input, [v, φ]
+    % 1. Simulate ground truth robot motion: Differential drive model with
+    % linear and angular velocity as control input, [v, ω]
 
     % Store previous state to compute actual displacement
     prev_state = true_state;
 
-    % Ackermann model control inputs: velocity (v) and steering angle (φ)
+    % Differential drive control inputs: linear velocity (v) and angular velocity (ω)
     v = velocity_profile(step);
-    phi = steering_profile(step);
+    omega = angular_velocity_profile(step);
 
-    % Ackermann dynamics: compute angular velocity (no noise - perfect execution)
-    omega = (v / L) * tan(phi);
+    % Differential drive dynamics (no noise - perfect execution)
+    % Note: v and ω could come from wheel velocities: v = (v_R + v_L)/2, ω = (v_R - v_L)/b
 
     % Use Euler method for integration (simpler, first-order)
     theta_k = true_state(3);
@@ -262,17 +262,17 @@ grid on;
 %% Control Input Visualization
 figure('Name', 'Control Inputs', 'Position', [100 100 1000 800]);
 
-% True Ackermann control inputs [v, φ]
+% True Differential Drive control inputs [v, ω]
 subplot(2,2,1);
 plot(velocity_profile, 'r-', 'LineWidth', 1.5);
 xlabel('Time Step'); ylabel('Velocity [m/s]');
-title('True Ackermann: Velocity Command');
+title('True Differential Drive: Linear Velocity Command');
 grid on;
 
 subplot(2,2,2);
-plot(rad2deg(steering_profile), 'r-', 'LineWidth', 1.5);
-xlabel('Time Step'); ylabel('Steering Angle [deg]');
-title('True Ackermann: Steering Angle Command');
+plot(rad2deg(angular_velocity_profile), 'r-', 'LineWidth', 1.5);
+xlabel('Time Step'); ylabel('Angular Velocity [deg/s]');
+title('True Differential Drive: Angular Velocity Command');
 grid on;
 
 % Odometry measurements (what EKF sees) [Δd, Δβ]
@@ -289,11 +289,11 @@ title('EKF Input: Measured Heading Increment');
 legend('Odometry (noisy)'); grid on;
 
 %% Display Statistics
-fprintf('\n========== EKF with Ackermann Model - Results ==========\n');
-fprintf('True Dynamics:          Ackermann [v, φ]\n');
+fprintf('\n========== EKF with Differential Drive Model - Results ==========\n');
+fprintf('True Dynamics:          Differential Drive [v, ω]\n');
 fprintf('EKF Control Input:      Odometry [Δd, Δβ]\n');
 fprintf('Trajectory Type:        %s\n', trajectory_type);
-fprintf('Wheelbase (L):          %.2f m\n', L);
+fprintf('Track Width (b):        %.2f m\n', b);
 fprintf('Time Step:              %.2f s\n', time_step);
 fprintf('Simulation Time:        %.2f s\n', simulation_time);
 fprintf('Number of Steps:        %d\n', num_steps);
