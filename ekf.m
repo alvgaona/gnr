@@ -1,109 +1,117 @@
-%% Extended Kalman Filter with Ackermann Model (Trapezoidal Integration)
-% This script simulates a robot with Ackermann steering while using an EKF
-% to estimate its position based on bearing measurements to beacons.
-%
-% Integration Method: Trapezoidal Rule (2nd order accurate)
-% - More accurate than Euler (1st order) or midpoint methods
-% - For Ackermann: x(k+1) = x(k) + dt/2 * v * [cos(θ_k) + cos(θ_{k+1})]
-%                  y(k+1) = y(k) + dt/2 * v * [sin(θ_k) + sin(θ_{k+1})]
-%                  θ(k+1) = θ(k) + dt * (v/L) * tan(φ)
+%% Extended Kalman Filter with Ackermann Model
+% Control input: [Δd, Δβ] where Δd is distance traveled and Δβ is heading change
+% This is typical for odometry-based systems
 
-clear all;
+clear;
 close all;
 clc;
 
 %% Vehicle and Simulation Parameters
 L = 2.5;                    % Wheelbase length [m]
-time_step = 0.1;            % Discrete time step [s]
-simulation_time = 10;       % Total simulation time [s]
+time_step = 0.2;            % Discrete time step [s]
+simulation_time = 20;       % Total simulation time [s]
 num_steps = simulation_time / time_step;
 
 %% Define Trajectory
 % You can change these to create different trajectories
-trajectory_type = 'circle';  % Options: 'straight', 'circle', 'curve'
+trajectory_type = 'curve';  % Options: 'linear', 'circular', 'curve'
 
 switch trajectory_type
-    case 'straight'
-        % Straight line trajectory
-        velocity_profile = 2.0 * ones(1, num_steps);           % Constant 2 m/s
-        steering_profile = 0.0 * ones(1, num_steps);           % Zero steering
-
-    case 'circle'
-        % Circular trajectory
-        velocity_profile = 1.0 * ones(1, num_steps);           % Constant 1 m/s
-        radius = 5;                                             % 5m radius
+    case 'linear'
+        % Linear trajectory
+        velocity_profile = 2.0 * ones(1, num_steps); % Constant 2 m/s
+        steering_profile = 0.0 * ones(1, num_steps); % Zero steering
+    case 'circular'
+        % Circular/Arc trajectory
+        velocity_profile = 1.0 * ones(1, num_steps); % Constant 1 m/s
+        radius = 5; % 5m radius
         steering_profile = atan(L/radius) * ones(1, num_steps); % Constant steering
-
     case 'curve'
         % Curved path with varying steering
-        velocity_profile = 1.5 * ones(1, num_steps);           % Constant 1.5 m/s
+        velocity_profile = 1.5 * ones(1, num_steps); % Constant 1.5 m/s
         steering_profile = 0.1 * sin(2*pi*(0:num_steps-1)/num_steps); % Sinusoidal steering
 end
 
+
 %% Process Noise (Motion Model Uncertainty)
-process_noise_v = 0.01;      % Velocity noise [m/s]
-process_noise_phi = 0.02;    % Steering angle noise [rad]
-Q = [process_noise_v^2, 0;
-     0, process_noise_phi^2];
+
+% For EKF (in odometry space: Δd, Δβ)
+Q = [
+    0.01^2, 0;   % Distance increment noise [m]
+    0, 0.02^2    % Heading increment noise [rad]
+];
 
 %% Measurement Noise (Sensor Uncertainty)
+
 measurement_noise_std = 0.05;  % Bearing measurement noise [rad]
 R = measurement_noise_std^2 * eye(3);  % 3 beacons
 
 %% Beacon Positions
 beacons = [
-    4,  8;   % Beacon 1
-    1,  1;   % Beacon 2
-    11, 3    % Beacon 3
+    4  8;   % Beacon 1
+    1  1;   % Beacon 2
+   11  3    % Beacon 3
 ];
 num_beacons = size(beacons, 1);
 
 %% Initial Conditions
-% True initial state
-true_state = [0; 0; pi/4];  % [x, y, theta] - Start at origin, heading 45 degrees
 
-% Initial estimate (with error to show EKF correction)
-estimated_state = true_state + [0.5; 0.5; 0.1];  % Small initial error
+% Initial state: start at origin, heading 45 degrees
+true_state = [0; 0; pi/4];  % [x, y, theta]
 
-% Initial state covariance
-P = diag([0.5^2, 0.5^2, 0.1^2]);  % Initial uncertainty
+% Initial state prediction (with error for EKF)
+estimated_state = true_state + [0.5; 0.5; 0.1];  % Just deviate a little
 
-%% Storage for Results
+% Initial state covariance: with uncertainty for the state vector
+P = diag([0.5^2, 0.5^2, 0.1^2]);
+
+%% Variables to show results
 true_trajectory = zeros(3, num_steps);
 estimated_trajectory = zeros(3, num_steps);
 variance_history = zeros(3, num_steps);
 control_history = zeros(2, num_steps);
 
 %% Main Simulation Loop
+
 for step = 1:num_steps
-    %% Generate Control Input with Noise
-    true_control = [velocity_profile(step); steering_profile(step)];
-    noisy_control = true_control + sqrt(Q) * randn(2, 1);
-    control_history(:, step) = noisy_control;
+    % 1. Simulate ground truth robot motion: Ackermann model with velocity
+    % and steering angle as control input, [v, φ]
 
-    %% Simulate True Robot Motion (Ackermann Model)
-    % Trapezoidal integration for better accuracy
-    theta_k = true_state(3);
-    v = true_control(1);
-    phi = true_control(2);
+    % Store previous state to compute actual displacement
+    prev_state = true_state;
 
-    % First, compute the new heading angle
+    % Ackermann model control inputs: velocity (v) and steering angle (φ)
+    v = velocity_profile(step);
+    phi = steering_profile(step);
+
+    % Ackermann dynamics: compute angular velocity (no noise - perfect execution)
     omega = (v / L) * tan(phi);
+
+    % Use trapezoidal method to integrate with more accuracy
+    theta_k = true_state(3);
     theta_k1 = theta_k + time_step * omega;
 
-    % Then use trapezoidal rule for position (average of velocities at k and k+1)
+    % Update true state with trapezoidal integration
     true_state = [
         true_state(1) + (time_step / 2) * v * (cos(theta_k) + cos(theta_k1));
         true_state(2) + (time_step / 2) * v * (sin(theta_k) + sin(theta_k1));
         theta_k1
     ];
 
-    % Add small process noise to true state
-    true_state = true_state + sqrt(time_step) * [
-        sqrt(Q(1,1)) * randn;
-        sqrt(Q(1,1)) * randn;
-        sqrt(Q(2,2)) * randn
-    ];
+    %% Compute Odometry Measurements [Δd, Δβ] from true motion
+    % This is what the EKF actually observes (with noise)
+    delta_x = true_state(1) - prev_state(1);
+    delta_y = true_state(2) - prev_state(2);
+    actual_delta_d = sqrt(delta_x^2 + delta_y^2);
+    actual_delta_beta = true_state(3) - prev_state(3);
+
+    % Add odometry measurement noise
+    measured_delta_d = actual_delta_d + sqrt(Q(1,1)) * randn;
+    measured_delta_beta = actual_delta_beta + sqrt(Q(2,2)) * randn;
+
+    % This is what the EKF receives
+    noisy_control = [measured_delta_d; measured_delta_beta];
+    control_history(:, step) = noisy_control;
 
     true_trajectory(:, step) = true_state;
 
@@ -120,41 +128,35 @@ for step = 1:num_steps
     end
 
     %% EKF PREDICTION STEP
-    % Predict state using Ackermann model with noisy control (Trapezoidal)
-    v_hat = noisy_control(1);
-    phi_hat = noisy_control(2);
+    % Control input: u = [Δd, Δβ]
+    delta_d_hat = noisy_control(1);
+    delta_beta_hat = noisy_control(2);
     theta_k = estimated_state(3);
 
-    % Compute the predicted heading angle
-    omega_hat = (v_hat / L) * tan(phi_hat);
-    theta_k1 = theta_k + time_step * omega_hat;
+    % Compute next heading first
+    theta_k1 = theta_k + delta_beta_hat;
 
-    % Predicted state (Trapezoidal integration)
+    % Predicted state using trapezoidal integration
     predicted_state = [
-        estimated_state(1) + (time_step / 2) * v_hat * (cos(theta_k) + cos(theta_k1));
-        estimated_state(2) + (time_step / 2) * v_hat * (sin(theta_k) + sin(theta_k1));
+        estimated_state(1) + (delta_d_hat / 2) * (cos(theta_k) + cos(theta_k1));
+        estimated_state(2) + (delta_d_hat / 2) * (sin(theta_k) + sin(theta_k1));
         theta_k1
     ];
 
     % Compute Jacobian of discrete transition function with respect to state
-    % For trapezoidal: need to account for θ_{k+1} dependence
-    % df_x/dθ = -(dt/2)*v*[sin(θ_k) + sin(θ_{k+1})*dθ_{k+1}/dθ_k]
-    % where dθ_{k+1}/dθ_k = 1
+    % f(x,y,θ) = [x + (Δd/2)*(cos(θ) + cos(θ+Δβ)); y + (Δd/2)*(sin(θ) + sin(θ+Δβ)); θ + Δβ]
     A = [
-        1, 0, -(time_step / 2) * v_hat * (sin(theta_k) + sin(theta_k1));
-        0, 1,  (time_step / 2) * v_hat * (cos(theta_k) + cos(theta_k1));
+        1, 0, -(delta_d_hat / 2) * (sin(theta_k) + sin(theta_k1));
+        0, 1,  (delta_d_hat / 2) * (cos(theta_k) + cos(theta_k1));
         0, 0,  1
     ];
 
-    % Compute Jacobian with respect to control
-    % More complex for trapezoidal due to coupling
-    sec_phi_sq = 1 / (cos(phi_hat)^2);
-    dtheta_dphi = (v_hat * time_step / L) * sec_phi_sq;
-
+    % Compute Jacobian with respect to control input u = [Δd, Δβ]
+    % For trapezoidal: includes both θ_k and θ_{k+1} terms
     W = [
-        (time_step / 2) * (cos(theta_k) + cos(theta_k1)),  -(time_step / 2) * v_hat * sin(theta_k1) * dtheta_dphi;
-        (time_step / 2) * (sin(theta_k) + sin(theta_k1)),   (time_step / 2) * v_hat * cos(theta_k1) * dtheta_dphi;
-        time_step * tan(phi_hat) / L,                       v_hat * time_step / L * sec_phi_sq
+        0.5 * (cos(theta_k) + cos(theta_k1)),  -0.5 * delta_d_hat * sin(theta_k1);
+        0.5 * (sin(theta_k) + sin(theta_k1)),   0.5 * delta_d_hat * cos(theta_k1);
+        0,                                      1
     ];
 
     % Predict covariance
@@ -215,7 +217,7 @@ position_error = sqrt(sum((true_trajectory(1:2,:) - estimated_trajectory(1:2,:))
 angle_error = abs(true_trajectory(3,:) - estimated_trajectory(3,:));
 
 %% Visualization
-figure('Name', 'EKF with Ackermann Model', 'Position', [50 50 1400 900]);
+figure('Name', 'EKF with Ackermann Model (Control: Δd, Δβ)', 'Position', [50 50 1400 900]);
 
 % Plot 1: 2D Trajectory with Beacons
 subplot(2,3,1);
@@ -270,24 +272,38 @@ legend('\sigma_x', '\sigma_y', '\sigma_\theta');
 grid on;
 
 %% Control Input Visualization
-figure('Name', 'Control Inputs', 'Position', [100 100 1000 500]);
+figure('Name', 'Control Inputs', 'Position', [100 100 1000 800]);
 
-subplot(2,1,1);
-plot(control_history(1,:), 'b-', 'LineWidth', 1.5);
-hold on; plot(velocity_profile, 'r--', 'LineWidth', 1);
+% True Ackermann control inputs [v, φ]
+subplot(2,2,1);
+plot(velocity_profile, 'r-', 'LineWidth', 1.5);
 xlabel('Time Step'); ylabel('Velocity [m/s]');
-title('Velocity Control Input');
-legend('Noisy', 'Commanded'); grid on;
+title('True Ackermann: Velocity Command');
+grid on;
 
-subplot(2,1,2);
-plot(rad2deg(control_history(2,:)), 'b-', 'LineWidth', 1.5);
-hold on; plot(rad2deg(steering_profile), 'r--', 'LineWidth', 1);
+subplot(2,2,2);
+plot(rad2deg(steering_profile), 'r-', 'LineWidth', 1.5);
 xlabel('Time Step'); ylabel('Steering Angle [deg]');
-title('Steering Angle Control Input');
-legend('Noisy', 'Commanded'); grid on;
+title('True Ackermann: Steering Angle Command');
+grid on;
+
+% Odometry measurements (what EKF sees) [Δd, Δβ]
+subplot(2,2,3);
+plot(control_history(1,:), 'b-', 'LineWidth', 1.5);
+xlabel('Time Step'); ylabel('Δd [m]');
+title('EKF Input: Measured Distance Increment');
+legend('Odometry (noisy)'); grid on;
+
+subplot(2,2,4);
+plot(rad2deg(control_history(2,:)), 'b-', 'LineWidth', 1.5);
+xlabel('Time Step'); ylabel('Δβ [deg]');
+title('EKF Input: Measured Heading Increment');
+legend('Odometry (noisy)'); grid on;
 
 %% Display Statistics
 fprintf('\n========== EKF with Ackermann Model - Results ==========\n');
+fprintf('True Dynamics:          Ackermann [v, φ]\n');
+fprintf('EKF Control Input:      Odometry [Δd, Δβ]\n');
 fprintf('Trajectory Type:        %s\n', trajectory_type);
 fprintf('Wheelbase (L):          %.2f m\n', L);
 fprintf('Time Step:              %.2f s\n', time_step);
