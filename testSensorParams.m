@@ -16,12 +16,12 @@ function [avg,cov] = testSensorParams(nMeasures,sensorName,plotBool)
         %pause(0.5);
         apoloUpdate();
     end
-    avg = sum(center_measures)/nMeasures;
+    avg = mean(center_measures);
     if plotBool
         figure("Name","Calibration results");
         subplot(1,2,1),title("Measures through time"),plot(center_measures);
         subplot(1,2,2),title("Measure distribution"),histogram(center_measures);
         xline(avg,'--r',{'Average','= '+string(avg)});
     end
-    cov = var(center_measures); %cov???
+    cov = std(center_measures);
 end
