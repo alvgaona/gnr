@@ -91,17 +91,16 @@ for step = 1:num_steps
     phi = steering_profile(step);
 
     % Ackermann dynamics: compute angular velocity (no noise - perfect execution)
-    omega = (v / L) * tan(phi);  % vL/tan(φ)
+    omega = (v / L) * tan(phi);
 
-    % Use trapezoidal method to integrate with more accuracy
+    % Use Euler method for integration (simpler, first-order)
     theta_k = true_state(3);
-    theta_k1 = theta_k + time_step * omega;
 
-    % Update true state with trapezoidal integration
+    % Update true state with Euler integration
     true_state = [
-        true_state(1) + (time_step / 2) * v * (cos(theta_k) + cos(theta_k1));
-        true_state(2) + (time_step / 2) * v * (sin(theta_k) + sin(theta_k1));
-        theta_k1
+        true_state(1) + time_step * v * cos(theta_k);
+        true_state(2) + time_step * v * sin(theta_k);
+        theta_k + time_step * omega
     ];
 
     %% Compute Odometry Measurements [Δd, Δβ] from true motion - Vectorized
@@ -134,30 +133,28 @@ for step = 1:num_steps
     delta_beta_hat = noisy_control(2);
     theta_k = estimated_state(3);
 
-    % Compute next heading first
-    theta_k1 = theta_k + delta_beta_hat;
-
-    % Predicted state using trapezoidal integration
+    % Predicted state using midpoint odometry model
+    theta_mid = theta_k + delta_beta_hat / 2;
     predicted_state = [
-        estimated_state(1) + (delta_d_hat / 2) * (cos(theta_k) + cos(theta_k1));
-        estimated_state(2) + (delta_d_hat / 2) * (sin(theta_k) + sin(theta_k1));
-        theta_k1
+        estimated_state(1) + delta_d_hat * cos(theta_mid);
+        estimated_state(2) + delta_d_hat * sin(theta_mid);
+        theta_k + delta_beta_hat
     ];
 
     % Compute Jacobian of discrete transition function with respect to state
-    % f(x,y,θ) = [x + (Δd/2)*(cos(θ) + cos(θ+Δβ)); y + (Δd/2)*(sin(θ) + sin(θ+Δβ)); θ + Δβ]
+    % f(x,y,θ) = [x + Δd*cos(θ + Δβ/2); y + Δd*sin(θ + Δβ/2); θ + Δβ]
     A = [
-        1, 0, -(delta_d_hat / 2) * (sin(theta_k) + sin(theta_k1));
-        0, 1,  (delta_d_hat / 2) * (cos(theta_k) + cos(theta_k1));
+        1, 0, -delta_d_hat * sin(theta_mid);
+        0, 1,  delta_d_hat * cos(theta_mid);
         0, 0,  1
     ];
 
     % Compute Jacobian with respect to control input u = [Δd, Δβ]
-    % For trapezoidal: includes both θ_k and θ_{k+1} terms
+    % For midpoint model: ∂f/∂[Δd, Δβ]
     W = [
-        0.5 * (cos(theta_k) + cos(theta_k1)),  -0.5 * delta_d_hat * sin(theta_k1);
-        0.5 * (sin(theta_k) + sin(theta_k1)),   0.5 * delta_d_hat * cos(theta_k1);
-        0,                                      1
+        cos(theta_mid),  -0.5 * delta_d_hat * sin(theta_mid);
+        sin(theta_mid),   0.5 * delta_d_hat * cos(theta_mid);
+        0,                1
     ];
 
     % Predict covariance
