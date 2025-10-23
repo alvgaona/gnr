@@ -1,6 +1,12 @@
-%% Extended Kalman Filter with Ackermann Model
+%% Extended Kalman Filter with Ackermann Model (Trapezoidal Integration)
 % This script simulates a robot with Ackermann steering while using an EKF
 % to estimate its position based on bearing measurements to beacons.
+%
+% Integration Method: Trapezoidal Rule (2nd order accurate)
+% - More accurate than Euler (1st order) or midpoint methods
+% - For Ackermann: x(k+1) = x(k) + dt/2 * v * [cos(θ_k) + cos(θ_{k+1})]
+%                  y(k+1) = y(k) + dt/2 * v * [sin(θ_k) + sin(θ_{k+1})]
+%                  θ(k+1) = θ(k) + dt * (v/L) * tan(φ)
 
 clear all;
 close all;
@@ -76,15 +82,20 @@ for step = 1:num_steps
     control_history(:, step) = noisy_control;
 
     %% Simulate True Robot Motion (Ackermann Model)
-    % Discrete-time Ackermann update
-    theta = true_state(3);
+    % Trapezoidal integration for better accuracy
+    theta_k = true_state(3);
     v = true_control(1);
     phi = true_control(2);
 
-    true_state = true_state + time_step * [
-        v * cos(theta);
-        v * sin(theta);
-        (v / L) * tan(phi)
+    % First, compute the new heading angle
+    omega = (v / L) * tan(phi);
+    theta_k1 = theta_k + time_step * omega;
+
+    % Then use trapezoidal rule for position (average of velocities at k and k+1)
+    true_state = [
+        true_state(1) + (time_step / 2) * v * (cos(theta_k) + cos(theta_k1));
+        true_state(2) + (time_step / 2) * v * (sin(theta_k) + sin(theta_k1));
+        theta_k1
     ];
 
     % Add small process noise to true state
@@ -109,30 +120,41 @@ for step = 1:num_steps
     end
 
     %% EKF PREDICTION STEP
-    % Predict state using Ackermann model with noisy control
+    % Predict state using Ackermann model with noisy control (Trapezoidal)
     v_hat = noisy_control(1);
     phi_hat = noisy_control(2);
-    theta_prev = estimated_state(3);
+    theta_k = estimated_state(3);
 
-    % Predicted state (Euler integration)
-    predicted_state = estimated_state + time_step * [
-        v_hat * cos(theta_prev);
-        v_hat * sin(theta_prev);
-        (v_hat / L) * tan(phi_hat)
+    % Compute the predicted heading angle
+    omega_hat = (v_hat / L) * tan(phi_hat);
+    theta_k1 = theta_k + time_step * omega_hat;
+
+    % Predicted state (Trapezoidal integration)
+    predicted_state = [
+        estimated_state(1) + (time_step / 2) * v_hat * (cos(theta_k) + cos(theta_k1));
+        estimated_state(2) + (time_step / 2) * v_hat * (sin(theta_k) + sin(theta_k1));
+        theta_k1
     ];
 
-    % Compute Jacobian of motion model with respect to state (A matrix)
-    A = eye(3) + time_step * [
-        0, 0, -v_hat * sin(theta_prev);
-        0, 0,  v_hat * cos(theta_prev);
-        0, 0,  0
+    % Compute Jacobian of discrete transition function with respect to state
+    % For trapezoidal: need to account for θ_{k+1} dependence
+    % df_x/dθ = -(dt/2)*v*[sin(θ_k) + sin(θ_{k+1})*dθ_{k+1}/dθ_k]
+    % where dθ_{k+1}/dθ_k = 1
+    A = [
+        1, 0, -(time_step / 2) * v_hat * (sin(theta_k) + sin(theta_k1));
+        0, 1,  (time_step / 2) * v_hat * (cos(theta_k) + cos(theta_k1));
+        0, 0,  1
     ];
 
-    % Compute Jacobian of motion model with respect to control (W matrix)
-    W = time_step * [
-        cos(theta_prev), 0;
-        sin(theta_prev), 0;
-        tan(phi_hat)/L,  v_hat/(L * cos(phi_hat)^2)
+    % Compute Jacobian with respect to control
+    % More complex for trapezoidal due to coupling
+    sec_phi_sq = 1 / (cos(phi_hat)^2);
+    dtheta_dphi = (v_hat * time_step / L) * sec_phi_sq;
+
+    W = [
+        (time_step / 2) * (cos(theta_k) + cos(theta_k1)),  -(time_step / 2) * v_hat * sin(theta_k1) * dtheta_dphi;
+        (time_step / 2) * (sin(theta_k) + sin(theta_k1)),   (time_step / 2) * v_hat * cos(theta_k1) * dtheta_dphi;
+        time_step * tan(phi_hat) / L,                       v_hat * time_step / L * sec_phi_sq
     ];
 
     % Predict covariance
