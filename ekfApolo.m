@@ -7,7 +7,6 @@ close all;
 clc;
 
 %% Vehicle and Simulation Parameters
-b = 0.5;                    % Track width (wheel separation) [m]
 time_step = 0.2;            % Discrete time step [s]
 simulation_time = 30;       % Total simulation time [s]
 num_steps = simulation_time / time_step;
@@ -58,8 +57,8 @@ R_std = sqrt(diag(R));
 %% Beacon Positions
 beacons = [
     -3.9  3.9;   % Beacon 1
-    3.9  3.9;   % Beacon 2
-   0  3.9    % Beacon 3
+    3.9   3.9;   % Beacon 2
+    0     3.9    % Beacon 3
 ];
 num_beacons = size(beacons, 1);
 
@@ -93,9 +92,6 @@ for step = 1:num_steps
     % 1. Simulate ground truth robot motion: Differential drive model with
     % linear and angular velocity as control input, [v, ω]
 
-    % Store previous state to compute actual displacement
-    prev_state = true_state;
-
     % Differential drive control inputs: linear velocity (v) and angular velocity (ω)
     v = velocity_profile(step);
     omega = angular_velocity_profile(step);
@@ -105,13 +101,6 @@ for step = 1:num_steps
 
     % Use Euler method for integration (simpler, first-order)
     theta_k = true_state(3);
-
-    % Update true state with Euler integration
-    true_state = [
-        true_state(1) + time_step * v * cos(theta_k);
-        true_state(2) + time_step * v * sin(theta_k);
-        theta_k + time_step * omega
-    ];
     
     % meas=apoloGetOdometry(robotName);
     % apoloMoveMRobot(robotName,[linearVelCmd,angularVelCmd],Atime);
@@ -127,12 +116,8 @@ for step = 1:num_steps
 
     %% Compute Odometry Measurements [Δd, Δβ] from true motion - Vectorized
     % This is what the EKF actually observes (with noise)
-    state_delta = true_state - prev_state;
-    actual_control = [norm(state_delta(1:2)); state_delta(3)];
-
-    % Add odometry measurement noise (vectorized)
-    noisy_control = actual_control + Q_std .* randn(2, 1);
-    control_history(:, step) = noisy_control;
+    % state_delta = true_state - prev_state;
+    % actual_control = [norm(state_delta(1:2)); state_delta(3)];
 
     true_trajectory(:, step) = true_state;
 
@@ -153,8 +138,6 @@ for step = 1:num_steps
     %% EKF PREDICTION STEP
     % Control input: u = [Δd, Δβ]
     [delta_d_hat,delta_beta_hat]=calculateOdometryDiff(robotName,prev_odom);
-    % delta_d_hat = noisy_control(1);
-    % delta_beta_hat = noisy_control(2);
     theta_k = estimated_state(3);
 
     % Predicted state using midpoint odometry model
@@ -188,13 +171,13 @@ for step = 1:num_steps
 
     %% EKF UPDATE STEP - Vectorized
     % Compute all predicted measurements at once
-    dx_pred = beacons(:,1) - odometryState(1);%predicted_state(1);
-    dy_pred = beacons(:,2) - odometryState(2);%predicted_state(2);
+    dx_pred = beacons(:,1) - predicted_state(1);
+    dy_pred = beacons(:,2) - predicted_state(2);
     dist_sq = dx_pred.^2 + dy_pred.^2;
 
     % Predicted bearings
     predicted_bearings = atan2(dy_pred, dx_pred);
-    predicted_measurements = predicted_bearings - odometryState(3);%predicted_state(3);
+    predicted_measurements = predicted_bearings - predicted_state(3);
 
     % Normalize to [-pi, pi]
     predicted_measurements = atan2(sin(predicted_measurements), cos(predicted_measurements));
@@ -319,7 +302,6 @@ fprintf('\n========== EKF with Differential Drive Model - Results ==========\n')
 fprintf('True Dynamics:          Differential Drive [v, ω]\n');
 fprintf('EKF Control Input:      Odometry [Δd, Δβ]\n');
 fprintf('Trajectory Type:        %s\n', trajectory_type);
-fprintf('Track Width (b):        %.2f m\n', b);
 fprintf('Time Step:              %.2f s\n', time_step);
 fprintf('Simulation Time:        %.2f s\n', simulation_time);
 fprintf('Number of Steps:        %d\n', num_steps);
