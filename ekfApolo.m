@@ -9,7 +9,7 @@ clc;
 %% Vehicle and Simulation Parameters
 b = 0.5;                    % Track width (wheel separation) [m]
 time_step = 0.2;            % Discrete time step [s]
-simulation_time = 20;       % Total simulation time [s]
+simulation_time = 30;       % Total simulation time [s]
 num_steps = simulation_time / time_step;
 robotName = 'Dafne';
 laserName = 'LMS100';
@@ -65,7 +65,7 @@ num_beacons = size(beacons, 1);
 
 %% Initial Conditions
 
-% Initial state: start at origin, heading 45 degrees
+% Initial state
 if apoloPlaceMRobot(robotName,[0,-2.4,0],pi/2)~=1
     disp("Error placing "+robotName+" on position");
     return
@@ -90,7 +90,6 @@ control_history = zeros(2, num_steps);
 %% Main Simulation Loop
 
 for step = 1:num_steps
-    pause(0.1);
     % 1. Simulate ground truth robot motion: Differential drive model with
     % linear and angular velocity as control input, [v, ω]
 
@@ -122,6 +121,9 @@ for step = 1:num_steps
     prev_odom= apoloGetOdometry(robotName);
     apoloMoveMRobot(robotName,[v omega],time_step);
     apoloUpdate();
+    pause(time_step);
+    apoloLoc = apoloGetLocationMRobot(robotName);%[x y z theta]
+    true_state = [apoloLoc(1);apoloLoc(2);apoloLoc(4)];%[0; 0; pi/4];  % [x, y, theta]
 
     %% Compute Odometry Measurements [Δd, Δβ] from true motion - Vectorized
     % This is what the EKF actually observes (with noise)
