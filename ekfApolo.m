@@ -17,17 +17,17 @@ apoloResetOdometry(robotName);
 
 %% Define Trajectory
 % You can change these to create different trajectories
-trajectory_type = 'curve';  % Options: 'linear', 'circular', 'curve'
+trajectory_type = 'linear';  % Options: 'linear', 'circular', 'curve'
 
 switch trajectory_type
     case 'linear'
         % Linear trajectory
-        velocity_profile = 2.0 * ones(1, num_steps);        % Constant 2 m/s
+        velocity_profile = 0.1 * ones(1, num_steps);        % Constant 2 m/s
         angular_velocity_profile = 0.0 * ones(1, num_steps); % Zero rotation
     case 'circular'
         % Circular/Arc trajectory
         velocity_profile = 1.0 * ones(1, num_steps); % Constant 1 m/s
-        radius = 5; % 5m radius
+        radius = 3.2; % 5m radius
         angular_velocity_profile = (velocity_profile / radius); % Constant angular velocity
     case 'curve'
         % Curved path with varying angular velocity
@@ -59,19 +59,21 @@ R_std = sqrt(diag(R));
 beacons = [
     -3.9  3.9;   % Beacon 1
     3.9  3.9;   % Beacon 2
-   11  3    % Beacon 3
+   0  3.9    % Beacon 3
 ];
 num_beacons = size(beacons, 1);
 
 %% Initial Conditions
 
 % Initial state: start at origin, heading 45 degrees
-if apoloPlaceMRobot(robotName,[0,0,0],pi/4)~=1
+if apoloPlaceMRobot(robotName,[0,-2.4,0],pi/2)~=1
     disp("Error placing "+robotName+" on position");
+    return
 end
 apoloLoc = apoloGetLocationMRobot(robotName);%[x y z theta]
 true_state = [apoloLoc(1);apoloLoc(2);apoloLoc(4)];%[0; 0; pi/4];  % [x, y, theta]
 apoloResetOdometry(robotName);
+apoloUpdate();
 
 % Initial state prediction (with error for EKF)
 estimated_state = true_state + [0.5; 0.5; 0.1];  % Just deviate a little
@@ -88,6 +90,7 @@ control_history = zeros(2, num_steps);
 %% Main Simulation Loop
 
 for step = 1:num_steps
+    pause(0.1);
     % 1. Simulate ground truth robot motion: Differential drive model with
     % linear and angular velocity as control input, [v, ω]
 
@@ -140,7 +143,7 @@ for step = 1:num_steps
     % 
     % % Add measurement noise (using pre-computed R_std)
     % measurements = relative_bearings + R_std .* randn(num_beacons, 1);
-    measurements = apoloGetLaserLandMarks(laserName).angle;
+    measurements = apoloGetLaserLandMarks(laserName).angle';
 
     % Normalize to [-pi, pi]
     measurements = atan2(sin(measurements), cos(measurements));
