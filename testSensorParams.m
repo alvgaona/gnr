@@ -1,16 +1,21 @@
-nMeasures=100;sensorName='LMS100';
+nMeasures=100;sensorName='LMS100';landmark=true;
 %TESTSENSORPARAMS Tests n sensor measures, and calculates average and
 %covariance of the measures
 center_measures=zeros(1,nMeasures);
 for i = 1:nMeasures
-    meas=apoloGetLaserData(sensorName);
-    siz=size(meas);
-    if siz(2) > 181 %LMS100
-        %center_measures(i) = meas(round(539/2));
-    else %LMS200
-        meas = meas(1:180); %measure 181 is always 0...
+    if landmark ~= true
+        meas=apoloGetLaserData(sensorName);
+        siz=size(meas);
+        if siz(2) > 181 %LMS100
+            %center_measures(i) = meas(round(539/2));
+        else %LMS200
+            meas = meas(1:180); %measure 181 is always 0...
+        end
+        center_measures(i) = meas(round(size(meas,2)/2)); %get the forward facing laser
+    else
+        meas=apoloGetLaserLandMarks(sensorName).angle;
+        center_measures(i)=meas(1);
     end
-    center_measures(i) = meas(round(size(meas,2)/2)); %get the forward facing laser
     %pause(0.5);
     apoloUpdate();
 end

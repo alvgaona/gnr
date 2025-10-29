@@ -7,11 +7,13 @@ close all;
 clc;
 
 %% Vehicle and Simulation Parameters
+WorldXML = readstruct("DafneEKFLong.xml","FileType","xml");
 time_step = 0.2;            % Discrete time step [s]
 simulation_time = 30;       % Total simulation time [s]
 num_steps = simulation_time / time_step;
-robotName = 'Dafne';
-laserName = 'LMS100';
+robotName = convertStringsToChars(WorldXML.World.Pioneer3ATSim.nameAttribute);%LMS100Sim %LandMark mark_id="1"
+laserName = convertStringsToChars(WorldXML.World.LMS100Sim.nameAttribute);%'LMS100';
+%% Reset Odom
 apoloResetOdometry(robotName);
 
 %% Define Trajectory
@@ -21,7 +23,7 @@ trajectory_type = 'linear';  % Options: 'linear', 'circular', 'curve'
 switch trajectory_type
     case 'linear'
         % Linear trajectory
-        velocity_profile = 0.1 * ones(1, num_steps);        % Constant 2 m/s
+        velocity_profile = 1.5 * ones(1, num_steps);        % Constant 2 m/s
         angular_velocity_profile = 0.0 * ones(1, num_steps); % Zero rotation
     case 'circular'
         % Circular/Arc trajectory
@@ -48,19 +50,28 @@ Q_std = sqrt(diag(Q));
 
 %% Measurement Noise (Sensor Uncertainty)
 
-measurement_noise_std = 0.003206075150823;  % Bearing measurement noise [rad]
+measurement_noise_std = 0.023174091647608;  % Bearing measurement noise [rad]
 R = measurement_noise_std^2 * eye(3);  % 3 beacons
 
 % Pre-compute standard deviations for efficiency
 R_std = sqrt(diag(R));
 
 %% Beacon Positions
-beacons = [
-    -3.9  3.9;   % Beacon 1
-    3.9   3.9;   % Beacon 2
-    0     3.9    % Beacon 3
-];
-num_beacons = size(beacons, 1);
+num_beacons = size(WorldXML.World.LandMark,2);
+if num_beacons == 0
+    beacons = [ %x y id
+        -3.9  17 1;   % Beacon 1
+        3.9   17 2;   % Beacon 2
+        0     17 3   % Beacon 3
+    ];
+    num_beacons=size(beacons, 1);
+else %Get beacon positions from file
+    beacons = zeros(num_beacons,3);
+    for i=1:num_beacons
+        coords = split(extractBetween(WorldXML.World.LandMark(i).position,"{","}"),",");
+        beacons(i,:) = [coords(1) coords(2) WorldXML.World.LandMark(i).mark_idAttribute];
+    end
+end
 
 %% Initial Conditions
 
@@ -131,7 +142,7 @@ for step = 1:num_steps
     % % Add measurement noise (using pre-computed R_std)
     % measurements = relative_bearings + R_std .* randn(num_beacons, 1);
     measurements = apoloGetLaserLandMarks(laserName).angle';
-
+    measurementIDs = apoloGetLaserLandMarks(laserName).id;
     % Normalize to [-pi, pi]
     measurements = atan2(sin(measurements), cos(measurements));
 
@@ -171,8 +182,12 @@ for step = 1:num_steps
 
     %% EKF UPDATE STEP - Vectorized
     % Compute all predicted measurements at once
-    dx_pred = beacons(:,1) - predicted_state(1);
-    dy_pred = beacons(:,2) - predicted_state(2);
+    dx_pred = zeros(size(measurementIDs,2),1);
+    dy_pred = dx_pred;
+    for i=1:size(measurementIDs,2)
+        dx_pred(i) = beacons(i,1) - predicted_state(1);
+        dy_pred(i) = beacons(i,2) - predicted_state(2);
+    end
     dist_sq = dx_pred.^2 + dy_pred.^2;
 
     % Predicted bearings
@@ -183,13 +198,14 @@ for step = 1:num_steps
     predicted_measurements = atan2(sin(predicted_measurements), cos(predicted_measurements));
 
     % Measurement Jacobian (all rows at once)
-    H = [dy_pred ./ dist_sq, -dx_pred ./ dist_sq, -ones(num_beacons, 1)];
+    H = [dy_pred ./ dist_sq, -dx_pred ./ dist_sq, -ones(size(measurementIDs,2), 1)];
 
     % Innovation (measurement residual) with angle normalization
     innovation = measurements - predicted_measurements;
     innovation = atan2(sin(innovation), cos(innovation));
 
     % Innovation covariance
+    R = measurement_noise_std^2 * eye(size(measurementIDs,2));  % calculate R based on n beacons
     S = H * P_predicted * H' + R;
 
     % Kalman gain
