@@ -1,6 +1,6 @@
 %% Extended Kalman Filter with Differential Drive Model
 % Control input: [Δd, Δβ] where Δd is distance traveled and Δβ is heading change
-% This is typical for odometry-based systems
+% Measurement model: Bearing to beacons
 
 clear;
 close all;
