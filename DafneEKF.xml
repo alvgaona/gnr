@@ -1,7 +1,11 @@
 <?xml version="1.0" encoding="UTF-8" standalone="yes" ?>
 <root>
 	<World>
-		<WorldInfo name="" id="0"/>
+		<WorldInfo name="Dafne testing grounds" id="0">
+			<RegisterNumber number="029688"/>
+			<RegisterNumber number="252010"/>
+			<RegisterNumber number="705975"/>
+		</WorldInfo>
 		<FaceSetPart name="Sala Cuadrada 8x8" id="1">
 			<face>
 				<colour r="0.2" g="0.2"/>

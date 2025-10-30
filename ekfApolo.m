@@ -135,13 +135,6 @@ for step = 1:num_steps
 
     %% Generate Measurements (Bearing to each beacon) - Vectorized
     % Compute all bearings at once
-    % dx_beacons = beacons(:,1) - true_state(1);
-    % dy_beacons = beacons(:,2) - true_state(2);
-    % true_bearings = atan2(dy_beacons, dx_beacons);
-    % relative_bearings = true_bearings - true_state(3);
-    % 
-    % % Add measurement noise (using pre-computed R_std)
-    % measurements = relative_bearings + R_std .* randn(num_beacons, 1);
     measurements = apoloGetLaserLandMarks(laserName).angle';
     measurementIDs = apoloGetLaserLandMarks(laserName).id;
     % Normalize to [-pi, pi]
