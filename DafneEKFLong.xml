@@ -10,10 +10,10 @@
 			<face>
 				<colour r="0" b="0"/>
 				<vertex>
-					{4,-3,0}
-					{4,50,0}
-					{-4,50,0}
-					{-4,-3,0}
+					{20,-3,0}
+					{20,50,0}
+					{-20,50,0}
+					{-20,-3,0}
 				</vertex>
 			</face>
 			<face>
@@ -28,7 +28,7 @@
 					{1.5708,0,1.5708}
 				</orientation>
 				<position>
-					{4,-3,0}
+					{20,-3,0}
 				</position>
 			</face>
 			<face>
@@ -43,7 +43,7 @@
 					{1.5708,0,-3.14159}
 				</orientation>
 				<position>
-					{4,50,0}
+					{20,50,0}
 				</position>
 			</face>
 			<face>
@@ -58,7 +58,7 @@
 					{1.5708,0,-1.5708}
 				</orientation>
 				<position>
-					{-4,4,0}
+					{-20,4,0}
 				</position>
 			</face>
 			<face>
@@ -73,23 +73,20 @@
 					{1.5708,0,0}
 				</orientation>
 				<position>
-					{-4,-3,0}
+					{-20,-3,0}
 				</position>
 			</face>
 		</FaceSetPart>
-		<Pioneer3ATSim name="Dafne" id="2">
-			<orientation>
-				{0,-0,1.5708}
-			</orientation>
+		<Pioneer3ATSim intersectable="false" name="Dafne" id="2">
 			<position>
-				{0,42.6,0}
+				{0,-2.4,0}
 			</position>
-			<odometry seconds="1761766536" microseconds="153000">
+			<odometry seconds="1761837828" microseconds="958000">
 				<orientation>
-					{0,-0,-3.05271}
+					{-0,-0,-0.155824}
 				</orientation>
 				<position>
-					{-309.303,-14.9123,0}
+					{-261.301,25.3404,0}
 				</position>
 			</odometry>
 		</Pioneer3ATSim>

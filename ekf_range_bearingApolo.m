@@ -18,7 +18,7 @@ apoloResetOdometry(robotName);
 
 %% Define Trajectory
 % You can change these to create different trajectories
-trajectory_type = 'linear';  % Options: 'linear', 'circular', 'curve'
+trajectory_type = 'curve';  % Options: 'linear', 'circular', 'curve'
 
 switch trajectory_type
     case 'linear'
@@ -28,7 +28,7 @@ switch trajectory_type
     case 'circular'
         % Circular/Arc trajectory
         velocity_profile = 1.0 * ones(1, num_steps); % Constant 1 m/s
-        radius = 5; % 5m radius
+        radius = 10; % 5m radius
         angular_velocity_profile = (velocity_profile / radius); % Constant angular velocity
     case 'curve'
         % Curved path with varying angular velocity
@@ -51,7 +51,7 @@ Q_std = sqrt(diag(Q));
 %% Measurement Noise (Sensor Uncertainty)
 
 % Range and bearing measurements to beacons
-measurement_noise_range = 0.1;   % Range measurement noise [m]
+measurement_noise_range = 0.018085189925279;   % Range measurement noise [m]
 measurement_noise_bearing = 0.023174091647608;  % Bearing measurement noise [rad]
 
 % R matrix: [r1, phi1, r2, phi2, r3, phi3] - 3 beacons, 2 measurements each
@@ -84,7 +84,7 @@ num_measurements = 2 * num_beacons;  % Range + bearing per beacon
 %% Initial Conditions
 
 % Initial state
-if apoloPlaceMRobot(robotName,[0,-2.4,0],pi/2)~=1
+if apoloPlaceMRobot(robotName,[0,-2.4,0],0)~=1
     disp("Error placing "+robotName+" on position");
     return
 end
