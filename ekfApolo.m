@@ -72,6 +72,7 @@ else %Get beacon positions from file
         beacons(i,:) = [coords(1) coords(2) WorldXML.World.LandMark(i).mark_idAttribute];
     end
 end
+beacons = sort(beacons,3); %make index in array coincide with landmark index
 
 %% Initial Conditions
 
@@ -185,8 +186,9 @@ for step = 1:num_steps
     dx_pred = zeros(size(measurementIDs,2),1);
     dy_pred = dx_pred;
     for i=1:size(measurementIDs,2)
-        dx_pred(i) = beacons(i,1) - predicted_state(1);
-        dy_pred(i) = beacons(i,2) - predicted_state(2);
+        ji = measurementIDs(i);
+        dx_pred(i) = beacons(ji,1) - predicted_state(1);%get predicted only for measured beacons
+        dy_pred(i) = beacons(ji,2) - predicted_state(2);
     end
     dist_sq = dx_pred.^2 + dy_pred.^2;
 
