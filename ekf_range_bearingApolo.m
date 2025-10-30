@@ -230,7 +230,7 @@ for step = 1:num_steps
 
     % Innovation covariance
     noise_arr = zeros(1,num_measurements);
-    for i=1:size(measurementIDs,2)
+    for i=1:2:num_measurements
         noise_arr(i)=measurement_noise_range^2;
         noise_arr(i+1)=measurement_noise_bearing^2;
     end
