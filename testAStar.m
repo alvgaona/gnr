@@ -5,21 +5,15 @@ close all;
 %goal = [25,3,pi/2];
 WorldXML = readstruct("jardinRobot3.xml","FileType","xml");
 for i=1:size(WorldXML.World.CylindricalPart,2)
+    coords = double(split(extractBetween(WorldXML.World.CylindricalPart(i).position,"{","}"),","));
+    if strcmp(class(WorldXML.World.CylindricalPart(i).orientation),'string')
+        orient = split(extractBetween(WorldXML.World.CylindricalPart(i).orientation,"{","}"),",");
+    else
+        orient = [0,0,0];
+    end
     if WorldXML.World.CylindricalPart(i).nameAttribute == "START"
-        coords = double(split(extractBetween(WorldXML.World.CylindricalPart(i).position,"{","}"),","));
-        if strcmp(class(WorldXML.World.CylindricalPart(i).orientation),'string')
-            orient = split(extractBetween(WorldXML.World.CylindricalPart(i).orientation,"{","}"),",");
-        else
-            orient = [0,0,0];
-        end
         start = [coords(1),coords(2),double(orient(3))];
     elseif WorldXML.World.CylindricalPart(i).nameAttribute == "GOAL"
-        coords = double(split(extractBetween(WorldXML.World.CylindricalPart(i).position,"{","}"),","));
-        if strcmp(class(WorldXML.World.CylindricalPart(i).orientation),'string')
-            orient = split(extractBetween(WorldXML.World.CylindricalPart(i).orientation,"{","}"),",");
-        else
-            orient = [0,0,0];
-        end
         goal = [coords(1),coords(2),double(orient(3))];
     end
 end
