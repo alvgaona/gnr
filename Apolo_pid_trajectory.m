@@ -6,7 +6,6 @@ dt = 0.05;          % Time step (s)
 t_end = 20;         % Simulation duration (s)
 time = 0:dt:t_end;  % Time vector
 robotName = convertStringsToChars(WorldXML.World.Pioneer3ATSim.nameAttribute);%LMS100Sim %LandMark mark_id="1"
-laserName = convertStringsToChars(WorldXML.World.LMS100Sim.nameAttribute);%'LMS100';
 
 %% Model Parameters
 % State: [x,y,θ]
