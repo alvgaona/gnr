@@ -21,6 +21,7 @@ ss = stateSpaceSE2;
 sv = validatorOccupancyMap(ss);
 load gardenMap.mat %exampleMaps
 map = binaryOccupancyMap(imrotate(garden(:,:,1),180),"Resolution",10);
+map.inflate(0.3);
 sv.Map = map;
 sv.ValidationDistance = 0.1;
 ss.StateBounds = [map.XWorldLimits;map.YWorldLimits; [-pi pi]];
