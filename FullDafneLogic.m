@@ -13,7 +13,7 @@ if isempty(WorldXML) %Use the same map as planner
     WorldXML = readstruct("jardinRobot3.xml","FileType","xml");
 end
 time_step = 0.2;            % Discrete time step [s]
-simulation_time = 15;       % Total simulation time [s]
+simulation_time = 40;       % Total simulation time [s]
 num_steps = simulation_time / time_step;
 robotName = convertStringsToChars(WorldXML.World.Pioneer3ATSim.nameAttribute);%LMS100Sim %LandMark mark_id="1"
 laserName = convertStringsToChars(WorldXML.World.LMS100Sim.nameAttribute);%'LMS100';
@@ -103,7 +103,10 @@ for step = 1:num_steps
     %If we are close to the point in the trajectory, switch to the next one
     Ax=refpath.States(pathPoint,1)-estimated_state(1);
     Ay=refpath.States(pathPoint,2)-estimated_state(2);
-    if norm([Ax,Ay]) <= 0.1 %if distance to traj. point is less than 10cm
+    if norm([Ax,Ay]) <= 0.4 %if distance to traj. point is less than 10cm
+        if pathPoint == size(refpath.States,1)
+            break %we ended on the last point
+        end
         pathPoint = pathPoint + 1; %switch to next point
     end
     [v, omega] = DafnePID(refpath.States(pathPoint,:),estimated_state,time_step);
@@ -247,6 +250,12 @@ for step = 1:num_steps
     variance_history(:, step) = [P(1,1); P(2,2); P(3,3)];
 end
 
+% Adapt storage in case we ended early
+if step < num_steps
+    true_trajectory = true_trajectory(:,1:step-1);
+    estimated_trajectory = estimated_trajectory(:,1:step-1);
+end
+
 %% Compute Estimation Errors
 position_error = sqrt(sum((true_trajectory(1:2,:) - estimated_trajectory(1:2,:)).^2, 1));
 angle_error = abs(true_trajectory(3,:) - estimated_trajectory(3,:));
@@ -310,14 +319,14 @@ grid on;
 figure("Name","Trajectories");
 hold on; grid on; axis equal;
 show(map);
+plot(refpath.States(:,1), refpath.States(:,2), ':pentagramy', 'LineWidth', 2, 'DisplayName', 'Planned');
 plot(true_trajectory(1,:), true_trajectory(2,:), 'b-', 'LineWidth', 2, 'DisplayName', 'True');
 plot(estimated_trajectory(1,:), estimated_trajectory(2,:), 'r--', 'LineWidth', 2, 'DisplayName', 'Estimated');
-plot(refpath.States(:,1), refpath.States(:,2), ':pentagramy', 'LineWidth', 2, 'DisplayName', 'Planned');
 plot(true_trajectory(1,1), true_trajectory(2,1), 'go', 'MarkerSize', 12, 'MarkerFaceColor', 'g');
 plot(beacons(:,1), beacons(:,2), 'ms', 'MarkerSize', 15, 'MarkerFaceColor', 'm', 'DisplayName', 'Beacons');
 xlabel('X [m]'); ylabel('Y [m]');
 title('Trajectory');
-legend('Ground truth', 'Estimated', 'Planned', 'Initial Position', 'Beacons', 'Location', 'best');
+legend('Planned', 'Ground truth', 'Estimated', 'Initial Position', 'Beacons', 'Location', 'best');
 
 %% Display Statistics
 fprintf('\n========== EKF with range+bearing measurements - Results ==========\n');

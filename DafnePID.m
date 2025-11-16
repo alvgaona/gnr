@@ -13,7 +13,7 @@ function [v,omega] = DafnePID(desiredCoords,actualCoords,dt)
 % 
 % Output Arguments:
 %  - v (double) - linear velocity command
-%  - AB (double) - angular velocity command
+%  - omega (double) - angular velocity command
 %% PID Controller Parameters
 Kp_v = 0.5;         
 Ki_v = 0.01;       
