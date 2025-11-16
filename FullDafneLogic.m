@@ -7,6 +7,7 @@ close all;
 clc;
 
 testAStar;%Launch planner
+clear i coords orient goal ss sv garden planner;%clear unnecesary vars from planner
 
 %% Vehicle and Simulation Parameters
 if isempty(WorldXML) %Use the same map as planner
