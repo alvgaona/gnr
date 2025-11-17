@@ -3,7 +3,7 @@ close all;
 
 %start = [0,3,0];
 %goal = [25,3,pi/2];
-WorldXML = readstruct("jardinRobot3.xml","FileType","xml");
+WorldXML = readstruct("gardenPoli.xml","FileType","xml");
 for i=1:size(WorldXML.World.CylindricalPart,2)
     coords = double(split(extractBetween(WorldXML.World.CylindricalPart(i).position,"{","}"),","));
     if strcmp(class(WorldXML.World.CylindricalPart(i).orientation),'string')

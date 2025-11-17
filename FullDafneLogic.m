@@ -10,8 +10,17 @@ testAStar;%Launch planner
 clear i coords orient goal ss sv garden planner;%clear unnecesary vars from planner
 
 %% Vehicle and Simulation Parameters
+%Controller params
+gainStruct = struct;
+gainStruct.Kp_v = 0.5;         
+gainStruct.Ki_v = 0.01;       
+gainStruct.Kd_v = 0.1;
+gainStruct.Kp_omega = 2.0;
+gainStruct.Ki_omega = 0.05;
+gainStruct.Kd_omega = 0.3;
+
 if isempty(WorldXML) %Use the same map as planner
-    WorldXML = readstruct("jardinRobot3.xml","FileType","xml");
+    WorldXML = readstruct("gardenPoli.xml","FileType","xml");
 end
 time_step = 0.2;            % Discrete time step [s]
 simulation_time = 40;       % Total simulation time [s]
@@ -110,7 +119,7 @@ for step = 1:num_steps
         end
         pathPoint = pathPoint + 1; %switch to next point
     end
-    [v, omega] = DafnePID(refpath.States(pathPoint,:),estimated_state,time_step);
+    [v, omega] = DafnePID(gainStruct,refpath.States(pathPoint,:),estimated_state,time_step);
 
     % Differential drive dynamics (no noise - perfect execution)
     % Note: v and ω could come from wheel velocities: v = (v_R + v_L)/2, ω = (v_R - v_L)/b

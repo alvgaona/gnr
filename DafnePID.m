@@ -1,9 +1,11 @@
-function [v,omega] = DafnePID(desiredCoords,actualCoords,dt)
+function [v,omega] = DafnePID(gainStruct, desiredCoords,actualCoords,dt)
 %PID - Calculates linear and angular velocity commands via PID
 %   Calculates the linear and angular velocity commands based on the input
 %and pose estimation
 %
 % Input Arguments:
+%  - gainStruct (struct) -
+%    Gains for the v and omega controllers (Kp, Ki and Kd for each)
 %  - desiredCoords (double[]) -
 %    Desired position for the robot at the moment [x y theta]
 %  - actualCoords (double[]) -
@@ -15,13 +17,6 @@ function [v,omega] = DafnePID(desiredCoords,actualCoords,dt)
 %  - v (double) - linear velocity command
 %  - omega (double) - angular velocity command
 %% PID Controller Parameters
-Kp_v = 0.5;         
-Ki_v = 0.01;       
-Kd_v = 0.1;       
-
-Kp_omega = 2.0;
-Ki_omega = 0.05;
-Kd_omega = 0.3;
 
 % Maximum control inputs
 v_max = 2.0;        % Maximum linear velocity (m/s)
@@ -63,17 +58,17 @@ error_heading = atan2(sin(error_heading), cos(error_heading));
 error_dist_derivative = (error_dist - error_dist_prev) / dt;
 error_dist_integral = error_dist_integral + error_dist * dt;
 
-v = Kp_v * error_dist + ...
-    Ki_v * error_dist_integral + ...
-    Kd_v * error_dist_derivative;
+v = gainStruct.Kp_v * error_dist + ...
+    gainStruct.Ki_v * error_dist_integral + ...
+    gainStruct.Kd_v * error_dist_derivative;
 
 % PID for angular velocity (based on heading error)
 error_heading_derivative = (error_heading - error_heading_prev) / dt;
 error_heading_integral = error_heading_integral + error_heading * dt;
 
-omega = Kp_omega * error_heading + ...
-    Ki_omega * error_heading_integral + ...
-    Kd_omega * error_heading_derivative;
+omega = gainStruct.Kp_omega * error_heading + ...
+    gainStruct.Ki_omega * error_heading_integral + ...
+    gainStruct.Kd_omega * error_heading_derivative;
 
 % Update previous errors
 error_dist_prev = error_dist;
