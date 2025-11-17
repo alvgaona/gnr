@@ -102,7 +102,12 @@ end
 %% EKF Initialization
 estimated_state = dead_reckoning_trajectory(:, 1);  % Start from same initial state
 P = diag([0.1 0.1 deg2rad(1)].^2);                  % Initial state covariance
-Q = diag([process_noise_velocity^2, process_noise_yaw_rate^2]);  % Process noise covariance
+
+% Process noise covariance for odometry [Δd, Δβ]
+% Discretized from continuous-time: Q_discrete = Q_continuous * dt
+process_noise_d = process_noise_velocity * sqrt(time_step);      % Distance increment noise [m]
+process_noise_beta = process_noise_yaw_rate * sqrt(time_step);   % Heading increment noise [rad]
+Q = diag([process_noise_d^2, process_noise_beta^2]);
 
 % Storage for plotting
 estimated_trajectory = zeros(3, num_steps);
@@ -110,29 +115,46 @@ estimated_trajectory(:, 1) = estimated_state;
 
 %% Main EKF Loop
 for k = 2:num_steps
+    %% Compute Odometry Measurements from True Motion
+    % In reality, these would come from wheel encoders with noise
+    state_delta = true_trajectory(:, k) - true_trajectory(:, k-1);
+    actual_delta_d = norm(state_delta(1:2));
+    actual_delta_theta = state_delta(3);
+
+    % Add odometry measurement noise
+    noisy_delta_d = actual_delta_d + process_noise_velocity * sqrt(time_step) * randn;
+    noisy_delta_theta = actual_delta_theta + process_noise_yaw_rate * sqrt(time_step) * randn;
+
     %% EKF PREDICTION STEP
-    % Use commanded (nominal) velocities for prediction
-    v_hat = control_history(1, k-1);
-    omega_hat = control_history(2, k-1);
-    theta_estimated = estimated_state(3);
+    % Use noisy odometry measurements for prediction
+    theta_k = estimated_state(3);
 
-    % State transition Jacobian F
-    F = [1, 0, -v_hat * time_step * sin(theta_estimated);
-         0, 1,  v_hat * time_step * cos(theta_estimated);
-         0, 0,  1];
+    % Predicted state using midpoint odometry model
+    theta_mid = theta_k + noisy_delta_theta / 2;
+    predicted_state = [
+        estimated_state(1) + noisy_delta_d * cos(theta_mid);
+        estimated_state(2) + noisy_delta_d * sin(theta_mid);
+        theta_k + noisy_delta_theta
+    ];
 
-    % Control input Jacobian G
-    G = [time_step * cos(theta_estimated), 0;
-         time_step * sin(theta_estimated), 0;
-         0,                                time_step];
+    % Compute Jacobian of discrete transition function with respect to state
+    % f(x,y,θ) = [x + Δd*cos(θ + Δβ/2); y + Δd*sin(θ + Δβ/2); θ + Δβ]
+    A = [
+        1, 0, -noisy_delta_d * sin(theta_mid);
+        0, 1,  noisy_delta_d * cos(theta_mid);
+        0, 0,  1
+    ];
 
-    % Predict state
-    predicted_state = estimated_state + [v_hat * time_step * cos(theta_estimated);
-                                         v_hat * time_step * sin(theta_estimated);
-                                         omega_hat * time_step];
+    % Compute Jacobian with respect to odometry input u = [Δd, Δβ]
+    % For midpoint model: ∂f/∂[Δd, Δβ]
+    W = [
+        cos(theta_mid),  -0.5 * noisy_delta_d * sin(theta_mid);
+        sin(theta_mid),   0.5 * noisy_delta_d * cos(theta_mid);
+        0,                1
+    ];
 
     % Predict covariance
-    P_predicted = F * P * F' + G * Q * G';
+    P_predicted = A * P * A' + W * Q * W';
 
     %% Generate LMS200 Laser Scan (from true pose)
     scan = simulateLaserScan(true_trajectory(:, k), map_lines, max_range, measurement_noise_range);
