@@ -164,27 +164,40 @@ for k = 2:num_steps
 
     %% EKF UPDATE STEP - Process Each Observed Line
     for j = 1:size(lines_observed, 1)
-        % Observed line parameters
-        alpha_observed = lines_observed(j, 1);
-        d_observed = lines_observed(j, 2);
-        sigma_alpha = lines_observed(j, 3);
-        sigma_d = lines_observed(j, 4);
+        % Observed line parameters (in robot frame)
+        alpha_observed = lines_observed(j, 1);  % Angle of line normal (robot frame)
+        d_observed = lines_observed(j, 2);      % Distance to line (robot frame)
+        sigma_alpha = lines_observed(j, 3);     % Angular uncertainty
+        sigma_d = lines_observed(j, 4);         % Distance uncertainty
 
-        % Predicted measurement (laser frame)
-        % Note: assumes perfect data association
-        alpha_map = alpha_observed;
-        d_map = alpha_observed;  % Dummy value – will be overwritten
+        % Data Association: Match observed line to map line
+        % Convert observed line angle to world frame
         theta_predicted = predicted_state(3);
+        alpha_world = alpha_observed + theta_predicted;
+
+        % Find closest matching line in map (simple nearest neighbor)
+        angle_differences = zeros(num_walls, 1);
+        for w = 1:num_walls
+            angle_differences(w) = abs(normalizeAngle(map_lines(w, 1), alpha_world));
+        end
+        [~, idx] = min(angle_differences);
+        alpha_map = map_lines(idx, 1);  % Map line angle (world frame)
+        d_map = map_lines(idx, 2);      % Map line distance from origin
+
+        % Predicted measurement: What we'd observe if at predicted_state
+        % Measurement model: h(x) = [alpha_map - theta; d_map - n'*[x;y]]
         normal_map = [cos(alpha_map); sin(alpha_map)];
-        d_predicted = d_observed - normal_map' * predicted_state(1:2);
+        alpha_predicted = alpha_map - theta_predicted;  % Expected angle in robot frame
+        d_predicted = d_map - normal_map' * predicted_state(1:2);  % Expected distance
 
         % Innovation (measurement residual)
-        innovation_angle = normalizeAngle(alpha_observed, alpha_map - theta_predicted);
+        innovation_angle = normalizeAngle(alpha_observed, alpha_predicted);
         innovation_distance = d_observed - d_predicted;
         innovation = [innovation_angle; innovation_distance];
 
         % Measurement Jacobian H (2x3 matrix)
-        H = [0, 0, -1;
+        % h(x,y,θ) = [alpha_map - θ; d_map - cos(alpha_map)*x - sin(alpha_map)*y]
+        H = [0,              0,              -1;
              -cos(alpha_map), -sin(alpha_map), 0];
 
         % Measurement noise covariance
