@@ -3,7 +3,7 @@ close all;
 
 %start = [0,3,0];
 %goal = [25,3,pi/2];
-WorldXML = readstruct("jardinRobot3.xml","FileType","xml");
+WorldXML = readstruct("gardenPoli.xml","FileType","xml");
 for i=1:size(WorldXML.World.CylindricalPart,2)
     coords = double(split(extractBetween(WorldXML.World.CylindricalPart(i).position,"{","}"),","));
     if strcmp(class(WorldXML.World.CylindricalPart(i).orientation),'string')
@@ -21,6 +21,7 @@ ss = stateSpaceSE2;
 sv = validatorOccupancyMap(ss);
 load gardenMap.mat %exampleMaps
 map = binaryOccupancyMap(imrotate(garden(:,:,1),180),"Resolution",10);
+map.inflate(0.3);
 sv.Map = map;
 sv.ValidationDistance = 0.1;
 ss.StateBounds = [map.XWorldLimits;map.YWorldLimits; [-pi pi]];
