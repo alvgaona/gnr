@@ -1,19 +1,15 @@
-%% Extended Kalman Filter with Differential Drive Model
-% Control input: [Δd, Δβ] where Δd is distance traveled and Δβ is heading change
-% Measurement model: Range and bearing to beacons
+%% Maze Runner full implementation
+clear; close all; clc;
 
-clear;clear DafnePID; %reset static vars (errors)
-close all;
-clc;
+load('gardenMap.mat');
 
-testAStar;%Launch planner
-clear i coords orient goal ss sv garden planner;%clear unnecesary vars from planner
+[~, start, goal, refpath] = maze_planner('gardenPoli.xml', garden, inflate);
 
 %% Vehicle and Simulation Parameters
 %Controller params
 gainStruct = struct;
-gainStruct.Kp_v = 0.5;         
-gainStruct.Ki_v = 0.01;       
+gainStruct.Kp_v = 0.5;
+gainStruct.Ki_v = 0.01;
 gainStruct.Kd_v = 0.1;
 gainStruct.Kp_omega = 2.0;
 gainStruct.Ki_omega = 0.05;
@@ -119,7 +115,7 @@ for step = 1:num_steps
         end
         pathPoint = pathPoint + 1; %switch to next point
     end
-    [v, omega] = DafnePID(gainStruct,refpath.States(pathPoint,:),estimated_state,time_step);
+    [v, omega] = differential_drive_pid(gainStruct,refpath.States(pathPoint,:),estimated_state,time_step);
 
     % Differential drive dynamics (no noise - perfect execution)
     % Note: v and ω could come from wheel velocities: v = (v_R + v_L)/2, ω = (v_R - v_L)/b
@@ -207,7 +203,7 @@ for step = 1:num_steps
     predicted_measurements = zeros(num_measurements, 1);
     predicted_measurements(1:2:end) = ranges_pred;
     predicted_measurements(2:2:end) = predicted_relative_bearings;
-    
+
     % Normalize bearing predictions to [-pi, pi]
     predicted_measurements(2:2:end) = atan2(sin(predicted_measurements(2:2:end)), ...
                                             cos(predicted_measurements(2:2:end)));
