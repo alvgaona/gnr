@@ -113,7 +113,7 @@ for step = 1:num_steps
 
     % Use Euler method for integration (simpler, first-order)
     theta_k = true_state(3);
-    
+
     % meas=apoloGetOdometry(robotName);
     % apoloMoveMRobot(robotName,[linearVelCmd,angularVelCmd],Atime);
     % apoloUpdate();

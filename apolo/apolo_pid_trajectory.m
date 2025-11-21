@@ -27,9 +27,9 @@ v = 0;              % Linear velocity (m/s)
 omega = 0;          % Angular velocity (rad/s)
 
 %% PID Controller Parameters
-Kp_v = 0.5;         
-Ki_v = 0.01;       
-Kd_v = 0.1;       
+Kp_v = 0.5;
+Ki_v = 0.01;
+Kd_v = 0.1;
 
 Kp_omega = 2.0;
 Ki_omega = 0.05;
@@ -94,37 +94,37 @@ desired_traj(:, 1) = desired_x;
 desired_traj(:, 2) = desired_y;
 
 %% Simulation Loop
-for i = 1:length(time)    
+for i = 1:length(time)
     % Position error
     error_x = desired_x(i) - x;
     error_y = desired_y(i) - y;
-    
+
     % Distance error (magnitude)
     error_dist = sqrt(error_x^2 + error_y^2);
-    
+
     % Heading error to target
     theta_target = atan2(error_y, error_x);
     error_heading = theta_target - theta;
-    
+
     % Normalize angle error to [-pi, pi]
     error_heading = atan2(sin(error_heading), cos(error_heading));
-    
+
     % PID for linear velocity (based on distance error)
     error_dist_derivative = (error_dist - error_dist_prev) / dt;
     error_dist_integral = error_dist_integral + error_dist * dt;
-    
+
     v = Kp_v * error_dist + ...
         Ki_v * error_dist_integral + ...
         Kd_v * error_dist_derivative;
-    
+
     % PID for angular velocity (based on heading error)
     error_heading_derivative = (error_heading - error_heading_prev) / dt;
     error_heading_integral = error_heading_integral + error_heading * dt;
-    
+
     omega = Kp_omega * error_heading + ...
         Ki_omega * error_heading_integral + ...
         Kd_omega * error_heading_derivative;
-    
+
     % Saturate control inputs
     v = max(min(v, v_max), 0);
     omega = max(min(omega, omega_max), -omega_max);
@@ -138,10 +138,10 @@ for i = 1:length(time)
     pause(dt);
     loc = apoloGetLocationMRobot(robotName);%[x y z theta]
     x=loc(1);y=loc(2);theta=loc(4);
-    
+
     % Normalize theta to [-pi, pi]
     theta = atan2(sin(theta), cos(theta));
-    
+
     % Update previous errors
     error_dist_prev = error_dist;
     error_heading_prev = error_heading;
