@@ -2,8 +2,9 @@
 clear; close all; clc;
 
 load('gardenMap.mat');
+map = binaryOccupancyMap(imrotate(garden(:,:,1), 180), "Resolution", 10);
 
-[~, start, goal, refpath] = maze_planner('gardenPoli.xml', garden, inflate);
+[~, start, goal, waypoints, traj] = maze_planner('gardenPoli.xml', garden, 0.3);
 
 %% Vehicle and Simulation Parameters
 %Controller params
@@ -15,11 +16,10 @@ gainStruct.Kp_omega = 2.0;
 gainStruct.Ki_omega = 0.05;
 gainStruct.Kd_omega = 0.3;
 
-if isempty(WorldXML) %Use the same map as planner
-    WorldXML = readstruct("gardenPoli.xml","FileType","xml");
-end
+WorldXML = readstruct("gardenPoli.xml","FileType","xml");
 time_step = 0.2;            % Discrete time step [s]
-simulation_time = 40;       % Total simulation time [s]
+pause_time = 0.01;          % For "realism" use time_step [s]
+simulation_time = 60;       % Total simulation time [s]
 num_steps = simulation_time / time_step;
 robotName = convertStringsToChars(WorldXML.World.Pioneer3ATSim.nameAttribute);%LMS100Sim %LandMark mark_id="1"
 laserName = convertStringsToChars(WorldXML.World.LMS100Sim.nameAttribute);%'LMS100';
@@ -27,7 +27,7 @@ laserName = convertStringsToChars(WorldXML.World.LMS100Sim.nameAttribute);%'LMS1
 apoloResetOdometry(robotName);
 
 %% Define Trajectory
-%Run the planner and store the trajectory points in 'refpath.States'!!!
+%Run the planner and store the trajectory points in 'traj'!!!
 %Also store the initial point in 'start'
 pathPoint = 2;%counter for the trajectory points, 1 is start
 
@@ -72,7 +72,7 @@ else %Get beacon positions from file
         beacons(i,:) = [coords(1) coords(2) WorldXML.World.LandMark(i).mark_idAttribute];
     end
 end
-beacons = sort(beacons,3); %make index in array coincide with landmark index
+beacons = sortrows(beacons,3); %make index in array coincide with landmark index
 num_measurements = 2 * num_beacons;  % Range + bearing per beacon
 
 %% Initial Conditions
@@ -107,15 +107,15 @@ for step = 1:num_steps
 
     % Differential drive control inputs: linear velocity (v) and angular velocity (ω)
     %If we are close to the point in the trajectory, switch to the next one
-    Ax=refpath.States(pathPoint,1)-estimated_state(1);
-    Ay=refpath.States(pathPoint,2)-estimated_state(2);
-    if norm([Ax,Ay]) <= 0.4 %if distance to traj. point is less than 10cm
-        if pathPoint == size(refpath.States,1)
+    Ax=traj(pathPoint,1)-estimated_state(1);
+    Ay=traj(pathPoint,2)-estimated_state(2);
+    if norm([Ax,Ay]) <= 0.4 %if distance to traj. point is less than ...
+        if pathPoint == size(traj,1)
             break %we ended on the last point
         end
         pathPoint = pathPoint + 1; %switch to next point
     end
-    [v, omega] = differential_drive_pid(gainStruct,refpath.States(pathPoint,:),estimated_state,time_step);
+    [v, omega] = differential_drive_pid(gainStruct,traj(pathPoint,:),estimated_state,time_step);
 
     % Differential drive dynamics (no noise - perfect execution)
     % Note: v and ω could come from wheel velocities: v = (v_R + v_L)/2, ω = (v_R - v_L)/b
@@ -127,7 +127,7 @@ for step = 1:num_steps
     prev_odom= apoloGetOdometry(robotName);
     apoloMoveMRobot(robotName,[v omega],time_step);
     apoloUpdate();
-    pause(time_step);
+    pause(pause_time);
     apoloLoc = apoloGetLocationMRobot(robotName);%[x y z theta]
     true_state = [apoloLoc(1);apoloLoc(2);apoloLoc(4)];%[x y theta]
 
@@ -151,7 +151,7 @@ for step = 1:num_steps
 
     %% EKF PREDICTION STEP
     % Control input: u = [Δd, Δβ]
-    [delta_d_hat,delta_beta_hat]=calculateOdometryDiff(robotName,prev_odom);
+    [delta_d_hat,delta_beta_hat]=apolo_odometry(robotName,prev_odom);
     theta_k = estimated_state(3);
 
     % Predicted state using midpoint odometry model
@@ -325,14 +325,15 @@ grid on;
 figure("Name","Trajectories");
 hold on; grid on; axis equal;
 show(map);
-plot(refpath.States(:,1), refpath.States(:,2), ':pentagramy', 'LineWidth', 2, 'DisplayName', 'Planned');
+plot(traj(:,1), traj(:,2), ':pentagramy', 'LineWidth', 2, 'DisplayName', 'Planned');
 plot(true_trajectory(1,:), true_trajectory(2,:), 'b-', 'LineWidth', 2, 'DisplayName', 'True');
 plot(estimated_trajectory(1,:), estimated_trajectory(2,:), 'r--', 'LineWidth', 2, 'DisplayName', 'Estimated');
-plot(true_trajectory(1,1), true_trajectory(2,1), 'go', 'MarkerSize', 12, 'MarkerFaceColor', 'g');
+plot(true_trajectory(1,1), true_trajectory(2,1), 'ko', 'MarkerSize', 12, 'MarkerFaceColor', 'r');
 plot(beacons(:,1), beacons(:,2), 'ms', 'MarkerSize', 15, 'MarkerFaceColor', 'm', 'DisplayName', 'Beacons');
+plot(waypoints(:,1), waypoints(:,2), 'ko', 'MarkerSize', 12, 'MarkerFaceColor', 'cyan');
 xlabel('X [m]'); ylabel('Y [m]');
 title('Trajectory');
-legend('Planned', 'Ground truth', 'Estimated', 'Initial Position', 'Beacons', 'Location', 'best');
+legend('Planned', 'Ground truth', 'Estimated', 'Initial Position', 'Beacons', 'Waypoints', 'Location', 'best');
 
 %% Display Statistics
 fprintf('\n========== EKF with range+bearing measurements - Results ==========\n');

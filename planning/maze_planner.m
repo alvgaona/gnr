@@ -1,4 +1,4 @@
-function [planner, start, goal, refpath] = maze_planner(filename, map, inflate)
+function [planner, start, goal, waypoints, traj] = maze_planner(filename, map, inflate)
 %MAZE_PLANNER - Path planning for maze navigation using Hybrid A*
 %   Computes a collision-free reference path from START to GOAL positions
 %   defined in an XML world file using Hybrid A* algorithm on an occupancy
@@ -13,7 +13,8 @@ function [planner, start, goal, refpath] = maze_planner(filename, map, inflate)
 %   planner (plannerHybridAStar) - Configured Hybrid A* planner object
 %   start (1x3)                  - Start pose [x, y, theta] in world frame [m, m, rad]
 %   goal (1x3)                   - Goal pose [x, y, theta] in world frame [m, m, rad]
-%   refpath (navPath)            - Planned path object containing states and directions
+%   waypoints (Nx3)              - Waypoints along the planned path [x, y, theta]
+%   traj (navPath)            - Planned path object containing states and directions
 %
 % Example:
 %   map = imread('maze.png');
@@ -31,6 +32,8 @@ worldxml = readstruct(filename, "FileType", "xml");
 
 start = zeros(1, 3);
 goal = zeros(1, 3);
+waypoints = [];
+it = 1;
 
 % Extract START and GOAL poses from cylindrical parts
 for i = 1:size(worldxml.World.CylindricalPart, 2)
@@ -51,8 +54,15 @@ for i = 1:size(worldxml.World.CylindricalPart, 2)
         start = [coords(1), coords(2), double(orient(3))];
     elseif part.nameAttribute == "GOAL"
         goal = [coords(1), coords(2), double(orient(3))];
+    elseif worldxml.World.CylindricalPart(i).nameAttribute.startsWith("WAYPOINT")
+        waypointNum = worldxml.World.CylindricalPart(i).nameAttribute.replace("WAYPOINT","");
+        waypoints(it,:) = [coords(1),coords(2),double(orient(3)),double(waypointNum)];
+        it=it+1;
     end
 end
+
+clear it waypointNum orient coords;
+waypoints = sortrows(waypoints,4);
 
 %% Configure State Space and Validator
 % SE(2) state space: [x, y, theta]
@@ -77,6 +87,18 @@ state_space.StateBounds = [
 %% Compute Reference Trajectory
 
 % Hybrid A* planner for car-like robots
-planner = plannerHybridAStar(state_validator, "MinTurningRadius", 1);
-refpath = plan(planner, start, goal, "SearchMode", "exhaustive");
+planner = plannerHybridAStar(state_validator,"MinTurningRadius",1.6);
+if size(waypoints,1) < 1
+    refpath = plan(planner,start,goal,"SearchMode","exhaustive"); %refpath.States has the traj coordinates
+    traj = refpath.States;
+else
+    refpath = plan(planner,start,waypoints(1,1:3),"SearchMode","exhaustive");
+    traj = refpath.States;
+    for i=1:size(waypoints,1)-1
+        refpath = plan(planner,waypoints(i,1:3),waypoints(i+1,1:3),"SearchMode","exhaustive");
+        traj = [traj; refpath.States];
+    end
+    refpath = plan(planner,waypoints(size(waypoints,1),1:3),goal,"SearchMode","exhaustive");
+    traj = [traj; refpath.States];
+end
 end
