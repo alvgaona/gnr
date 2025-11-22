@@ -14,30 +14,40 @@ function lines = ransac_lines(scan, distance_threshold, min_points)
     % and (σ_α, σ_d) just the standard deviation for each parameter.
     lines = [];
 
-    
     while size(pts, 1) > min_points
         best_inlier_count = 0;
         best_model = [];
 
         % RANSAC iterations
         for iter = 1:30
-            % Select a random subset of the points:
-            % The minimum points needed to define the model
+            % Select a random subset of the points: the minimum points
+            % needed to define to fit the model (line).
             idx = randi(size(pts, 1), 2, 1);
             p1 = pts(idx(1), :);
             p2 = pts(idx(2), :);
-            
+
             % Try again if points are too close
             if norm(p2 - p1) < 0.05
                 continue;
             end
 
-            % Compute line through p1 and p2
+            % Compute the direction vector of the line
+            % passing through 2 points
             dp = p2 - p1;
+
+            % Based on the direction vector, compute the normal vector
+            % by flipping the components and normalize the normal vector
             n = [-dp(2), dp(1)] / norm(dp);
+
+            % Compute the projection of a given point (p1)
+            % onto the normal vector, which is the distance
+            % to the line from the origin
             d = n * p1';
 
-            % Count inliers
+            % Count inliers by calculating the projection of each
+            % points to the normal vector and if that distance is greater
+            % than the threshold, then it does not belong to the same line.
+            % Therefore, it is an outlier. But this is just an iteration.
             in = abs(n * pts' - d) < distance_threshold;
             nin = sum(in);
 
