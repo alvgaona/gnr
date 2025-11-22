@@ -36,6 +36,7 @@ waypoints = [];
 it = 1;
 
 % Extract START and GOAL poses from cylindrical parts
+if isfield(worldxml.World,'CylindricalPart')
 for i = 1:size(worldxml.World.CylindricalPart, 2)
     part = worldxml.World.CylindricalPart(i);
 
@@ -54,10 +55,47 @@ for i = 1:size(worldxml.World.CylindricalPart, 2)
         start = [coords(1), coords(2), double(orient(3))];
     elseif part.nameAttribute == "GOAL"
         goal = [coords(1), coords(2), double(orient(3))];
-    elseif worldxml.World.CylindricalPart(i).nameAttribute.startsWith("WAYPOINT")
+    elseif part.nameAttribute.startsWith("WAYPOINT")
         waypointNum = worldxml.World.CylindricalPart(i).nameAttribute.replace("WAYPOINT","");
         waypoints(it,:) = [coords(1),coords(2),double(orient(3)),double(waypointNum)];
         it=it+1;
+    end
+end
+else
+    display('No cylinder parts!')
+end
+it = 1;
+% Waypoints based on statues
+if size(waypoints,1) < 1
+    for i = 1:size(worldxml.World.MeshPart, 2)
+        part = worldxml.World.MeshPart(i);
+        if isa(part.position, 'string')
+            coords = double(split(extractBetween(part.position, "{", "}"), ","));
+        end
+        if isa(part.orientation, 'string')
+            orient = split(extractBetween(part.orientation, "{", "}"), ",");
+        else
+            orient = [0, 0, 0];
+        end
+        if part.nameAttribute.startsWith("death")
+            LM = part.nameAttribute.split('-');LM = LM(2);
+            waypointNum = LM.replace("LM","");
+            ang = rad2deg(double(orient(3)));
+            if ang < 0
+                ang = 360 + ang;
+            end
+            if ang < 15 || ang > 345 % Looking up
+                coords(2) = coords(2)+6.5; 
+            elseif ang < 195 && ang > 165 % Looking down
+                coords(2) = coords(2)-6.5;
+            elseif ang > 255 && ang < 285 % Looking right
+                coords(1) = coords(1)+6.5; 
+            elseif ang > 75 && ang < 105 % Looking left
+                coords(1) = coords(1)-6.5;
+            end
+            waypoints(it,:) = [coords(1),coords(2),double(orient(3))-pi/2,double(waypointNum)];
+            it=it+1;
+        end
     end
 end
 
@@ -92,13 +130,21 @@ if size(waypoints,1) < 1
     refpath = plan(planner,start,goal,"SearchMode","exhaustive"); %refpath.States has the traj coordinates
     traj = refpath.States;
 else
-    refpath = plan(planner,start,waypoints(1,1:3),"SearchMode","exhaustive");
+    if start == zeros(1, 3)
+        disp('Using waypoint 1 as start');
+        start = waypoints(1,1:3); waypoints = waypoints(2:end,:);
+    end
+    if goal == zeros(1, 3)
+        disp('Using last waypoint as goal');
+        goal = waypoints(end,1:3); waypoints = waypoints(1:end-1,:);
+    end
+    refpath = plan(planner,start,waypoints(1,1:3),"SearchMode","greedy");
     traj = refpath.States;
     for i=1:size(waypoints,1)-1
-        refpath = plan(planner,waypoints(i,1:3),waypoints(i+1,1:3),"SearchMode","exhaustive");
+        refpath = plan(planner,waypoints(i,1:3),waypoints(i+1,1:3),"SearchMode","greedy");
         traj = [traj; refpath.States];
     end
-    refpath = plan(planner,waypoints(size(waypoints,1),1:3),goal,"SearchMode","exhaustive");
+    refpath = plan(planner,waypoints(size(waypoints,1),1:3),goal,"SearchMode","greedy");
     traj = [traj; refpath.States];
 end
 end

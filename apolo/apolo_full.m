@@ -4,8 +4,8 @@ clear; close all; clc;
 load('gardenMap.mat');
 map = binaryOccupancyMap(imrotate(garden(:,:,1), 180), "Resolution", 10);
 
-[~, start, goal, waypoints, traj] = maze_planner('gardenPoli.xml', garden, 0.3);
-
+[~, start, goal, waypoints, traj] = maze_planner('MazeRunner.xml', garden, 0.3);
+disp('Trajectory calculated!');
 %% Vehicle and Simulation Parameters
 %Controller params
 gainStruct = struct;
