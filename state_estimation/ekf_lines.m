@@ -1,25 +1,22 @@
-%% Extended Kalman Filter with Line Feature Observations
-% Control input: [v, ω] where v is linear velocity and ω is angular velocity
-% Measurement model: Line features extracted from laser range scanner (LMS200)
-% Lines represented in Hesse normal form [alpha, d]
-
 clear;
 close all;
 clc;
 rng(0);  % Repeatable random number generation
 
-%% Map Definition - Simple "Box" Maze
-% Lines in Hesse normal form [alpha (rad), d (m)]
-% Normal angle alpha counted from world x-axis
-map_lines = [deg2rad(90)   0;       % Horizontal walls
-             deg2rad(90)  10;
-             deg2rad(0)   0;        % Vertical walls
-             deg2rad(0)  10];
+%% Map Definition
+
+% Lines in Hesse normal form from the world/odom/map frame
+map_lines = [
+    deg2rad(90) 0; deg2rad(90)  10;  % Horizontal walls
+    deg2rad(0) 0; deg2rad(0)  10     % Vertical walls
+];
 
 % Add two internal walls to create corners
-map_lines = [map_lines;
-             deg2rad(0)   4;
-             deg2rad(90)  6];
+map_lines = [
+    map_lines;
+    deg2rad(0) 4;
+    deg2rad(90) 6
+];
 num_walls = size(map_lines, 1);
 
 %% Vehicle and Simulation Parameters
@@ -40,6 +37,7 @@ measurement_noise_range = 0.01;      % Range measurement noise [m]
 max_range = 8;                       % Maximum sensor range [m]
 
 %% Initial Conditions
+
 % Ground truth trajectory storage
 true_trajectory = zeros(3, num_steps);      % [x; y; theta]
 control_history = zeros(2, num_steps);      % [v; omega]
@@ -54,22 +52,22 @@ for k = 1:num_steps-1
         control_history(:, k) = [nominal_velocity; deg2rad(30)];
     end
 
-    % Add motor noise to control inputs
-    v_noisy = control_history(1, k) + process_noise_velocity * randn * sqrt(time_step);
-    omega_noisy = control_history(2, k) + process_noise_yaw_rate * randn * sqrt(time_step);
+    v = control_history(1, k);
+    omega = control_history(2, k);
 
     % Integrate using Euler method
     theta_k = true_trajectory(3, k);
-    true_trajectory(:, k+1) = [true_trajectory(1, k) + v_noisy * time_step * cos(theta_k);
-                               true_trajectory(2, k) + v_noisy * time_step * sin(theta_k);
-                               theta_k + omega_noisy * time_step];
+    true_trajectory(:, k+1) = [
+        true_trajectory(1, k) + v * time_step * cos(theta_k);
+        true_trajectory(2, k) + v * time_step * sin(theta_k);
+        theta_k + omega * time_step
+    ];
 end
 
 %% Dead Reckoning (Open Loop)
 % Accumulates drift via random walk - errors compound over time
 dead_reckoning_trajectory = zeros(3, num_steps);
 dead_reckoning_trajectory(:, 1) = true_trajectory(:, 1);
-P = diag([0.1 0.1 deg2rad(1)].^2);  % Initial covariance
 
 % Noise parameters for random walk drift (continuous-time diffusion)
 drift_noise_x = 0.005;            % Position drift diffusion [m/sqrt(s)]
@@ -81,19 +79,21 @@ accumulated_drift = [0; 0; 0];
 
 for k = 1:num_steps-1
     % Random walk: accumulate drift proportional to sqrt(time_step)
-    accumulated_drift = accumulated_drift + [drift_noise_x * randn * sqrt(time_step);
-                                             drift_noise_y * randn * sqrt(time_step);
-                                             drift_noise_theta * randn * sqrt(time_step)];
+    accumulated_drift = accumulated_drift + [
+        drift_noise_x * randn * sqrt(time_step);
+        drift_noise_y * randn * sqrt(time_step);
+        drift_noise_theta * randn * sqrt(time_step)
+    ];
 
-    % Use pure controls (no noise added to controls)
-    v_commanded = control_history(1, k);
-    omega_commanded = control_history(2, k);
+    v = control_history(1, k);
+    omega = control_history(2, k);
 
-    % Propagate forward using pure controls
     theta_k = dead_reckoning_trajectory(3, k);
-    propagated_state = dead_reckoning_trajectory(:, k) + [v_commanded * time_step * cos(theta_k);
-                                                           v_commanded * time_step * sin(theta_k);
-                                                           omega_commanded * time_step];
+    propagated_state = dead_reckoning_trajectory(:, k) + [
+        v * time_step * cos(theta_k);
+        v * time_step * sin(theta_k);
+        omega * time_step
+    ];
 
     % Add accumulated drift to get dead reckoning estimate
     dead_reckoning_trajectory(:, k+1) = propagated_state + accumulated_drift;
@@ -115,8 +115,7 @@ estimated_trajectory(:, 1) = estimated_state;
 
 %% Main EKF Loop
 for k = 2:num_steps
-    %% Compute Odometry Measurements from True Motion
-    % In reality, these would come from wheel encoders with noise
+    % Simulate odometry sensors
     state_delta = true_trajectory(:, k) - true_trajectory(:, k-1);
     actual_delta_d = norm(state_delta(1:2));
     actual_delta_theta = state_delta(3);
@@ -126,10 +125,9 @@ for k = 2:num_steps
     noisy_delta_theta = actual_delta_theta + process_noise_yaw_rate * sqrt(time_step) * randn;
 
     %% EKF PREDICTION STEP
-    % Use noisy odometry measurements for prediction
     theta_k = estimated_state(3);
 
-    % Predicted state using midpoint odometry model
+    % Midpoint odometry model prediction
     theta_mid = theta_k + noisy_delta_theta / 2;
     predicted_state = [
         estimated_state(1) + noisy_delta_d * cos(theta_mid);
@@ -164,18 +162,22 @@ for k = 2:num_steps
 
     %% EKF UPDATE STEP - Process Each Observed Line
     for j = 1:size(lines_observed, 1)
-        % Observed line parameters (in robot frame)
+        % Based on the lines detected and extracted from the LMS200
+        % sensor and RANSAC, the lines are based on the robot frame.
         alpha_observed = lines_observed(j, 1);  % Angle of line normal (robot frame)
         d_observed = lines_observed(j, 2);      % Distance to line (robot frame)
         sigma_alpha = lines_observed(j, 3);     % Angular uncertainty
         sigma_d = lines_observed(j, 4);         % Distance uncertainty
 
-        % Data Association: Match observed line to map line
-        % Convert observed line angle to world frame
+        % Data association should be performed.
+        % Basically, try to match the real lines with the ones we observe
+        % from the robot itself. Since the real lines are parameterized
+        % in the world frame, we should apply a frame transformation.
         theta_predicted = predicted_state(3);
         alpha_world = alpha_observed + theta_predicted;
 
-        % Find closest matching line in map (simple nearest neighbor)
+        % The matching happens by finding the closest matching line
+        % for each observed line.
         angle_differences = zeros(num_walls, 1);
         for w = 1:num_walls
             angle_differences(w) = abs(normalizeAngle(map_lines(w, 1), alpha_world));
