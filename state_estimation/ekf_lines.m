@@ -154,16 +154,14 @@ for k = 2:num_steps
     % Predict covariance
     P_predicted = A * P * A' + W * Q * W';
 
-    %% Generate LMS200 Laser Scan (from true pose)
-    scan = simulateLaserScan(true_trajectory(:, k), map_lines, max_range, measurement_noise_range);
+    %% Generate Laser Scan (from true pose)
+    scan = lms_scan(true_trajectory(:, k), map_lines, max_range, measurement_noise_range, 'LMS100');
 
     %% Extract Line Features using RANSAC
-    lines_observed = extractLinesRANSAC(scan, 0.02, 5);  % (alpha, d) + covariances
+    lines_observed = ransac_lines(scan, 0.02, 5);  % (alpha, d) + covariances
 
     %% EKF UPDATE STEP - Process Each Observed Line
     for j = 1:size(lines_observed, 1)
-        % Based on the lines detected and extracted from the LMS200
-        % sensor and RANSAC, the lines are based on the robot frame.
         alpha_observed = lines_observed(j, 1);  % Angle of line normal (robot frame)
         d_observed = lines_observed(j, 2);      % Distance to line (robot frame)
         sigma_alpha = lines_observed(j, 3);     % Angular uncertainty
@@ -180,7 +178,7 @@ for k = 2:num_steps
         % for each observed line.
         angle_differences = zeros(num_walls, 1);
         for w = 1:num_walls
-            angle_differences(w) = abs(normalizeAngle(map_lines(w, 1), alpha_world));
+            angle_differences(w) = abs(atan2(sin(map_lines(w, 1) - alpha_world), cos(map_lines(w, 1) - alpha_world)));
         end
         [~, idx] = min(angle_differences);
         alpha_map = map_lines(idx, 1);  % Map line angle (world frame)
@@ -193,7 +191,7 @@ for k = 2:num_steps
         d_predicted = d_map - normal_map' * predicted_state(1:2);  % Expected distance
 
         % Innovation (measurement residual)
-        innovation_angle = normalizeAngle(alpha_observed, alpha_predicted);
+        innovation_angle = atan2(sin(alpha_observed - alpha_predicted), cos(alpha_observed - alpha_predicted));
         innovation_distance = d_observed - d_predicted;
         innovation = [innovation_angle; innovation_distance];
 
@@ -310,7 +308,7 @@ end
 % Overlay laser scans every 20 steps
 plot(true_trajectory(1, 1), true_trajectory(2, 1), 'ko', 'MarkerSize', 8, 'MarkerFaceColor', 'k');
 for k = 1:20:num_steps
-    scan = simulateLaserScan(true_trajectory(:, k), map_lines, max_range, measurement_noise_range);
+    scan = lms_scan(true_trajectory(:, k), map_lines, max_range, measurement_noise_range, 'LMS100');
     valid = ~isnan(scan(:, 1));
     xy = scan(valid, 1) .* [cos(scan(valid, 2) + true_trajectory(3, k)), ...
                             sin(scan(valid, 2) + true_trajectory(3, k))];
@@ -347,126 +345,3 @@ fprintf('  Final Position Error:   %.3f m\n', position_error_ekf(end));
 fprintf('  Mean Position Error:    %.3f m\n', mean(position_error_ekf));
 fprintf('  Max Position Error:     %.3f m\n', max(position_error_ekf));
 fprintf('===================================================================\n\n');
-
-%% Support Functions
-
-function scan = simulateLaserScan(robot_pose, map_lines, max_range, noise_std)
-    % Simulates LMS200 laser scanner
-    % Returns N×2 matrix [range(m), bearing(rad)]
-
-    % LMS200: 180-degree field of view, 181 beams (1-degree resolution)
-    angles = linspace(-pi/2, pi/2, 181);
-    ranges = inf(size(angles));
-
-    % For each wall, compute intersection with laser beams
-    for w = 1:size(map_lines, 1)
-        alpha = map_lines(w, 1);
-        d_wall = map_lines(w, 2);
-        n = [cos(alpha); sin(alpha)];
-
-        % Check each laser beam for intersection
-        for k = 1:numel(angles)
-            phi = angles(k) + robot_pose(3);
-            v = [cos(phi); sin(phi)];
-            denom = n' * v;
-            if abs(denom) > 1e-6
-                t = (d_wall - n' * robot_pose(1:2)) / denom;
-                if t > 0 && t < max_range
-                    ranges(k) = min(ranges(k), t);
-                end
-            end
-        end
-    end
-
-    % Mark out-of-range readings as NaN
-    ranges(isinf(ranges)) = NaN;
-
-    % Add measurement noise
-    ranges = ranges + noise_std * randn(size(ranges));
-
-    % Return [range, bearing] pairs
-    scan = [ranges(:), angles(:)];
-end
-
-function lines = extractLinesRANSAC(scan, distance_threshold, min_points)
-    % Extract line features from laser scan using RANSAC
-    % Returns [alpha, d, sigma_alpha, sigma_d] for each line
-
-    % Convert polar scan to Cartesian points (in robot frame)
-    pts = scan(:, 1) .* [cos(scan(:, 2)), sin(scan(:, 2))];
-    valid = ~isnan(scan(:, 1));
-    pts = pts(valid, :);
-    lines = [];  % Will store [alpha, d, sigma_alpha, sigma_d]
-
-    % Iteratively find lines until insufficient points remain
-    while size(pts, 1) > min_points
-        best_inlier_count = 0;
-        best_model = [];
-
-        % RANSAC iterations
-        for iter = 1:30
-            % Randomly sample 2 points
-            idx = randi(size(pts, 1), 2, 1);
-            p1 = pts(idx(1), :);
-            p2 = pts(idx(2), :);
-
-            % Skip if points are too close
-            if norm(p2 - p1) < 0.05
-                continue;
-            end
-
-            % Compute line through p1 and p2
-            dp = p2 - p1;
-            n = [-dp(2), dp(1)] / norm(dp);  % Normal to line
-            d = n * p1';
-
-            % Count inliers
-            in = abs(n * pts' - d) < distance_threshold;
-            nin = sum(in);
-
-            % Update best model
-            if nin > best_inlier_count
-                best_inlier_count = nin;
-                best_model = [atan2(n(2), n(1)), d];
-            end
-        end
-
-        % Stop if not enough inliers found
-        if best_inlier_count < min_points
-            break;
-        end
-
-        % Refine line using Total Least Squares (TLS) on inliers
-        inlier_points = pts(best_inlier_count, :);
-        [~, ~, V] = svd(inlier_points - mean(inlier_points, 1), 'econ');
-
-        % Check for rank deficiency
-        if size(V, 2) < 2
-            pts(best_inlier_count, :) = [];  % Discard and continue
-            continue;
-        end
-
-        % Normal is the minor axis (last singular vector)
-        normal_refined = V(:, 2)';
-        d_refined = normal_refined * mean(inlier_points, 1)';
-        alpha_refined = atan2(normal_refined(2), normal_refined(1));
-
-        % Estimate uncertainties from residuals
-        res = normal_refined * inlier_points' - d_refined;
-        sigma_d = std(res);
-
-        % Crude angular uncertainty estimate
-        sigma_alpha = sigma_d / sqrt(max(sum((inlier_points * normal_refined' - d_refined).^2), eps));
-
-        % Store line parameters
-        lines(end+1, :) = [alpha_refined, d_refined, sigma_alpha, sigma_d];
-
-        % Remove inliers from point cloud
-        pts(best_inlier_count, :) = [];
-    end
-end
-
-function diff_angle = normalizeAngle(a, b)
-    % Normalize angle difference to [-pi, pi]
-    diff_angle = mod(a - b + pi, 2*pi) - pi;
-end
