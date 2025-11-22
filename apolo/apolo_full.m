@@ -16,7 +16,7 @@ gainStruct.Kp_omega = 2.0;
 gainStruct.Ki_omega = 0.05;
 gainStruct.Kd_omega = 0.3;
 
-WorldXML = readstruct("gardenPoli.xml","FileType","xml");
+WorldXML = readstruct("MazeRunner.xml","FileType","xml");
 time_step = 0.2;            % Discrete time step [s]
 pause_time = 0.01;          % For "realism" use time_step [s]
 simulation_time = 60;       % Total simulation time [s]
