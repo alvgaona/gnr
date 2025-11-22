@@ -1,0 +1,84 @@
+function lines = ransac_lines(scan, distance_threshold, min_points)
+    % Convert LIDAR scans, that are in polar coordinate,
+    % to cartesian coordiantes w.r.t to the frame of the vehicle
+    pts = scan(:, 1) .* [cos(scan(:, 2)), sin(scan(:, 2))];
+
+    % Filter cartesian points that are NaN
+    valid = ~isnan(scan(:, 1));
+    pts = pts(valid, :);
+
+    % Output array: [α, d, σ_α, σ_d]
+    % Where α is the angle for the line,
+    % d the perpendicular distance to its parallel line passing
+    % through the origin
+    % and (σ_α, σ_d) just the standard deviation for each parameter.
+    lines = [];
+
+    
+    while size(pts, 1) > min_points
+        best_inlier_count = 0;
+        best_model = [];
+
+        % RANSAC iterations
+        for iter = 1:30
+            % Select a random subset of the points:
+            % The minimum points needed to define the model
+            idx = randi(size(pts, 1), 2, 1);
+            p1 = pts(idx(1), :);
+            p2 = pts(idx(2), :);
+            
+            % Try again if points are too close
+            if norm(p2 - p1) < 0.05
+                continue;
+            end
+
+            % Compute line through p1 and p2
+            dp = p2 - p1;
+            n = [-dp(2), dp(1)] / norm(dp);
+            d = n * p1';
+
+            % Count inliers
+            in = abs(n * pts' - d) < distance_threshold;
+            nin = sum(in);
+
+            % Update best model
+            if nin > best_inlier_count
+                best_inlier_count = nin;
+                best_model = [atan2(n(2), n(1)), d];
+            end
+        end
+
+        % Stop if not enough inliers found
+        if best_inlier_count < min_points
+            break;
+        end
+
+        % Refine line using Total Least Squares (TLS) on inliers
+        inlier_points = pts(best_inlier_count, :);
+        [~, ~, V] = svd(inlier_points - mean(inlier_points, 1), 'econ');
+
+        % Check for rank deficiency
+        if size(V, 2) < 2
+            pts(best_inlier_count, :) = [];  % Discard and continue
+            continue;
+        end
+
+        % Normal is the minor axis (last singular vector)
+        normal_refined = V(:, 2)';
+        d_refined = normal_refined * mean(inlier_points, 1)';
+        alpha_refined = atan2(normal_refined(2), normal_refined(1));
+
+        % Estimate uncertainties from residuals
+        res = normal_refined * inlier_points' - d_refined;
+        sigma_d = std(res);
+
+        % Crude angular uncertainty estimate
+        sigma_alpha = sigma_d / sqrt(max(sum((inlier_points * normal_refined' - d_refined).^2), eps));
+
+        % Store line parameters
+        lines(end+1, :) = [alpha_refined, d_refined, sigma_alpha, sigma_d];
+
+        % Remove inliers from point cloud
+        pts(best_inlier_count, :) = [];
+    end
+end
