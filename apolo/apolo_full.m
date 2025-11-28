@@ -149,6 +149,10 @@ for step = 1:num_steps
     % Normalize bearing angles to [-pi, pi]
     measurements(2:2:end) = atan2(sin(measurements(2:2:end)), cos(measurements(2:2:end)));
 
+    %% Get Laser measurements (raw measures, not beacons)
+    laser_measures = apoloGetLaserData(laserName);%LMS100->539 measures, 270º
+                                                  %LMS200->181 measures (last one is always 0), 180º
+
     %% EKF PREDICTION STEP
     % Control input: u = [Δd, Δβ]
     [delta_d_hat,delta_beta_hat]=apolo_odometry(robotName,prev_odom);
