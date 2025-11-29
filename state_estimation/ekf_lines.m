@@ -26,14 +26,11 @@ map_lines = [
 num_walls = size(map_lines, 1);
 
 %% Vehicle and Simulation Parameters
-nominal_velocity = 0.5;                   % Nominal speed [m/s]
-wheel_base = 0.4;                         % Wheel-base (for bicycle model) [m]
-time_step = 0.1;                          % Discrete time step [s] - 10 Hz
-num_steps = 400;                          % Total simulation steps
-simulation_time = num_steps * time_step;  % Total simulation time [s]
+dt = 0.1;                          % Discrete time step [s] - 10 Hz
+sim_time = 100;                    % Total simulation time [s]
+num_steps = sim_time / dt;         % Total simulation steps
 
-%% Process Noise (Motion Model Uncertainty)
-% Velocity and yaw-rate noise in continuous time
+%% Process Noise (continuous-time)
 process_noise_velocity = 0.05;       % Linear velocity noise [m/s/sqrt(s)]
 process_noise_yaw_rate = deg2rad(2); % Yaw rate noise [rad/s/sqrt(s)]
 
@@ -46,6 +43,7 @@ true_trajectory = zeros(3, num_steps);      % [x; y; theta]
 control_history = zeros(2, num_steps);      % [v; omega]
 true_trajectory(:, 1) = [1; 1; 0];          % Start at (1,1) heading east
 
+nominal_velocity = 0.5; % Nominal speed [m/s]
 for k = 1:num_steps-1
     if mod(k, 100) < 75
         control_history(:, k) = [nominal_velocity; 0];
@@ -56,16 +54,16 @@ for k = 1:num_steps-1
     v = control_history(1, k);
     omega = control_history(2, k);
 
-    % Integrate using Euler method
+    % Integrate using Euler method (we could use more accurate methods)
     theta_k = true_trajectory(3, k);
     true_trajectory(:, k+1) = [
-        true_trajectory(1, k) + v * time_step * cos(theta_k);
-        true_trajectory(2, k) + v * time_step * sin(theta_k);
-        theta_k + omega * time_step
+        true_trajectory(1, k) + v * dt * cos(theta_k);
+        true_trajectory(2, k) + v * dt * sin(theta_k);
+        theta_k + omega * dt
     ];
 end
 
-%% Dead Reckoning (Open Loop)
+%% Dead Reckoning (open-loop)
 dead_reckoning_trajectory = zeros(3, num_steps);
 dead_reckoning_trajectory(:, 1) = true_trajectory(:, 1);
 
@@ -79,9 +77,9 @@ accumulated_drift = [0; 0; 0];
 
 for k = 1:num_steps-1
     accumulated_drift = accumulated_drift + [
-        drift_noise_x * randn * sqrt(time_step);
-        drift_noise_y * randn * sqrt(time_step);
-        drift_noise_theta * randn * sqrt(time_step)
+        drift_noise_x * randn * sqrt(dt);
+        drift_noise_y * randn * sqrt(dt);
+        drift_noise_theta * randn * sqrt(dt)
     ];
 
     v = control_history(1, k);
@@ -89,9 +87,9 @@ for k = 1:num_steps-1
 
     theta_k = dead_reckoning_trajectory(3, k);
     propagated_state = dead_reckoning_trajectory(:, k) + [
-        v * time_step * cos(theta_k);
-        v * time_step * sin(theta_k);
-        omega * time_step
+        v * dt * cos(theta_k);
+        v * dt * sin(theta_k);
+        omega * dt
     ];
 
     dead_reckoning_trajectory(:, k+1) = propagated_state + accumulated_drift;
@@ -102,9 +100,8 @@ estimated_state = dead_reckoning_trajectory(:, 1);  % Start from same initial st
 P = diag([0.1 0.1 deg2rad(1)].^2);                  % Initial state covariance
 
 % Process noise covariance for odometry [Δd, Δβ]
-% Discretized from continuous-time: Q_discrete = Q_continuous * dt
-process_noise_d = process_noise_velocity * sqrt(time_step);      % Distance increment noise [m]
-process_noise_beta = process_noise_yaw_rate * sqrt(time_step);   % Heading increment noise [rad]
+process_noise_d = process_noise_velocity * sqrt(dt);      % Distance increment noise [m]
+process_noise_beta = process_noise_yaw_rate * sqrt(dt);   % Heading increment noise [rad]
 Q = diag([process_noise_d^2, process_noise_beta^2]);
 
 estimated_trajectory = zeros(3, num_steps);
@@ -123,8 +120,8 @@ for k = 2:num_steps
     actual_delta_theta = state_delta(3);
 
     % Add odometry measurement noise
-    noisy_delta_d = actual_delta_d + process_noise_velocity * sqrt(time_step) * randn;
-    noisy_delta_theta = actual_delta_theta + process_noise_yaw_rate * sqrt(time_step) * randn;
+    noisy_delta_d = actual_delta_d + process_noise_velocity * sqrt(dt) * randn;
+    noisy_delta_theta = actual_delta_theta + process_noise_yaw_rate * sqrt(dt) * randn;
 
     %% EKF PREDICTION STEP
     theta_k = estimated_state(3);
@@ -170,7 +167,6 @@ for k = 2:num_steps
         sigma_d = lines_observed(j, 4);         % Distance uncertainty
         
         %% Data association (matching)
-
         % Try to match the real lines with the ones we observe
         % from the robot itself.  Since the real lines are parameterized
         % in the world frame, we should apply a frame transformation.
@@ -234,16 +230,15 @@ end
 %% Compute Estimation Errors
 position_error_dr = sqrt(sum((dead_reckoning_trajectory(1:2, :) - true_trajectory(1:2, :)).^2, 1));
 position_error_ekf = sqrt(sum((estimated_trajectory(1:2, :) - true_trajectory(1:2, :)).^2, 1));
-time_vector = (0:num_steps-1) * time_step;
+time_vector = (0:num_steps-1) * dt;
 
 %% Display Statistics
 fprintf('\n========== Line-EKF with LMS200 Laser Scanner - Results ==========\n');
-fprintf('Vehicle Model:          Bicycle/Unicycle [v, ω]\n');
+fprintf('Vehicle Model:          Unicycle [v, ω]\n');
 fprintf('Measurement Model:      Line features from laser scan\n');
 fprintf('Map:                    %d walls in Hesse form\n', num_walls);
-fprintf('Wheel Base (L):         %.2f m\n', wheel_base);
-fprintf('Time Step:              %.2f s (%.0f Hz)\n', time_step, 1/time_step);
-fprintf('Simulation Time:        %.2f s\n', simulation_time);
+fprintf('Time Step:              %.2f s (%.0f Hz)\n', dt, 1/dt);
+fprintf('Simulation Time:        %.2f s\n', sim_time);
 fprintf('Number of Steps:        %d\n', num_steps);
 fprintf('\nProcess Noise:\n');
 fprintf('  Velocity Std Dev:     %.3f m/s/sqrt(s)\n', process_noise_velocity);
@@ -262,7 +257,7 @@ fprintf('  Mean Position Error:    %.3f m\n', mean(position_error_ekf));
 fprintf('  Max Position Error:     %.3f m\n', max(position_error_ekf));
 fprintf('===================================================================\n\n');
 
-%% Visualization
+%% Visualization (ignore logic)
 fig_animation = figure('Name', 'EKF Animation', 'Position', [50 50 1400 800]);
 
 subplot(2, 2, [1 3]);
@@ -308,7 +303,7 @@ h_error_ekf = plot(time_vector(1), position_error_ekf(1), 'r-', 'LineWidth', 2);
 xlabel('Time [s]'); ylabel('Position Error [m]');
 title('Position Error');
 legend('Dead Reckoning', 'Line-EKF', 'Location', 'best', 'AutoUpdate', 'off');
-xlim([0 simulation_time]); ylim([0 max(max(position_error_dr), max(position_error_ekf)) * 1.1]);
+xlim([0 sim_time]); ylim([0 max(max(position_error_dr), max(position_error_ekf)) * 1.1]);
 
 subplot(2, 2, 4);
 hold on; grid on;
@@ -318,7 +313,7 @@ h_cov_theta = plot(time_vector(1), rad2deg(covariance_history(3, 1)), 'b-', 'Lin
 xlabel('Time [s]'); ylabel('Standard Deviation');
 title('EKF Uncertainty ($\sigma$)');
 legend('$\sigma_x$ [m]', '$\sigma_y$ [m]', '$\sigma_\theta$ [deg]', 'Location', 'best', 'AutoUpdate', 'off');
-xlim([0 simulation_time]);
+xlim([0 sim_time]);
 ylim([0 max([max(covariance_history(1:2, :)), rad2deg(max(covariance_history(3, :)))]) * 1.1]);
 
 animation_step = 5; 
@@ -352,7 +347,7 @@ for k = 1:animation_step:num_steps
             ray_y(idx + 1) = robot_pos(2);
             ray_x(idx + 2) = scan_world(i, 1);
             ray_y(idx + 2) = scan_world(i, 2);
-            ray_x(idx + 3) = NaN;  % Break between rays
+            ray_x(idx + 3) = NaN;  % Space between rays
             ray_y(idx + 3) = NaN;
         end
         set(h_rays, 'XData', ray_x, 'YData', ray_y);
