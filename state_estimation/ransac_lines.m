@@ -16,7 +16,6 @@ function lines = ransac_lines(scan, distance_threshold, min_points)
 
     while size(pts, 1) > min_points
         best_inlier_count = 0;
-        best_model = [];
         best_inliers = [];
 
         % RANSAC iterations
@@ -52,10 +51,9 @@ function lines = ransac_lines(scan, distance_threshold, min_points)
             in = abs(n * pts' - d) < distance_threshold;
             nin = sum(in);
 
-            % Update best model
+            % Update best inliers
             if nin > best_inlier_count
                 best_inlier_count = nin;
-                best_model = [atan2(n(2), n(1)), d];
                 best_inliers = in;
             end
         end
