@@ -36,8 +36,7 @@ for i = 1:length(lines)
 
     % Convert to standard Hesse form [0, pi]
     if rho_pix < 0
-        % Flip to positive side
-        rho_pix = -rho_pix;
+        rho_pix = -rho_pix; % Flip to positive side
         theta_rad = theta_rad + pi;
     end
 
@@ -45,13 +44,14 @@ for i = 1:length(lines)
     alpha = mod(theta_rad, pi);
 
     % Filter: Keep only horizontal or vertical lines
-    % Horizontal lines: alpha ≈ 0 or alpha ≈ π (both map to 0 in [0,π])
-    % Vertical lines: alpha ≈ π/2
+    % Horizontal lines: α near 0 or π (both map to 0 in [0,π])
+    % Vertical lines: α near π/2
     is_horizontal = abs(alpha) < angle_tolerance || abs(alpha - pi) < angle_tolerance;
     is_vertical = abs(alpha - pi/2) < angle_tolerance;
-
+    
+    % Skip diagonal lines
     if ~(is_horizontal || is_vertical)
-        continue;  % Skip diagonal lines
+        continue;
     end
 
     % Convert distance from pixels to meters
