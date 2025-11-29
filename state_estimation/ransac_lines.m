@@ -17,6 +17,7 @@ function lines = ransac_lines(scan, distance_threshold, min_points)
     while size(pts, 1) > min_points
         best_inlier_count = 0;
         best_model = [];
+        best_inliers = [];
 
         % RANSAC iterations
         for iter = 1:30
@@ -55,6 +56,7 @@ function lines = ransac_lines(scan, distance_threshold, min_points)
             if nin > best_inlier_count
                 best_inlier_count = nin;
                 best_model = [atan2(n(2), n(1)), d];
+                best_inliers = in;
             end
         end
 
@@ -64,12 +66,12 @@ function lines = ransac_lines(scan, distance_threshold, min_points)
         end
 
         % Refine line using Total Least Squares (TLS) on inliers
-        inlier_points = pts(best_inlier_count, :);
+        inlier_points = pts(best_inliers, :);
         [~, ~, V] = svd(inlier_points - mean(inlier_points, 1), 'econ');
 
         % Check for rank deficiency
         if size(V, 2) < 2
-            pts(best_inlier_count, :) = [];  % Discard and continue
+            pts(best_inliers, :) = [];  % Discard and continue
             continue;
         end
 
@@ -82,13 +84,22 @@ function lines = ransac_lines(scan, distance_threshold, min_points)
         res = normal_refined * inlier_points' - d_refined;
         sigma_d = std(res);
 
-        % Crude angular uncertainty estimate
-        sigma_alpha = sigma_d / sqrt(max(sum((inlier_points * normal_refined' - d_refined).^2), eps));
+        % Angular uncertainty estimate based on point spread along the line
+        % Project points onto the line direction (tangent)
+        tangent = [-normal_refined(2), normal_refined(1)];
+        projections = (inlier_points - mean(inlier_points, 1)) * tangent';
+        line_extent = max(abs(projections));  % Half-length of the line segment
+
+        % Angular uncertainty: perpendicular error / line extent
+        % Ensure minimum extent to avoid division by very small numbers
+        % Add conservative floor values to prevent overconfidence
+        sigma_alpha = max(sigma_d / max(line_extent, 0.1), deg2rad(1.0));  % At least 1 degree
+        sigma_d = max(sigma_d, 0.02);  % At least 2 cm
 
         % Store line parameters
         lines(end+1, :) = [alpha_refined, d_refined, sigma_alpha, sigma_d];
 
         % Remove inliers from point cloud
-        pts(best_inlier_count, :) = [];
+        pts(best_inliers, :) = [];
     end
 end

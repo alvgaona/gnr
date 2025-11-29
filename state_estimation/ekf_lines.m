@@ -1,17 +1,23 @@
 clear;
 close all;
 clc;
-rng(0);  % Repeatable random number generation
+rng(0);
+
+set(groot, 'defaultTextInterpreter', 'latex');
+set(groot, 'defaultLegendInterpreter', 'latex');
+set(groot, 'defaultAxesTickLabelInterpreter', 'latex');
 
 %% Map Definition
 
-% Lines in Hesse normal form from the world/odom/map frame
+% Map is defined in Hesse form: (d,α).
+% d: perpendicular distance to the origin.
+% α: angle of that vector whose norm is the perpendicular distance.
 map_lines = [
     deg2rad(90) 0; deg2rad(90)  10;  % Horizontal walls
     deg2rad(0) 0; deg2rad(0)  10     % Vertical walls
 ];
 
-% Add two internal walls to create corners
+% Two more internal walls
 map_lines = [
     map_lines;
     deg2rad(0) 4;
@@ -20,10 +26,10 @@ map_lines = [
 num_walls = size(map_lines, 1);
 
 %% Vehicle and Simulation Parameters
-nominal_velocity = 0.5;         % Nominal speed [m/s]
-wheel_base = 0.4;               % Wheel-base (for bicycle model) [m]
-time_step = 0.1;                % Discrete time step [s] - 10 Hz
-num_steps = 400;                % Total simulation steps
+nominal_velocity = 0.5;                   % Nominal speed [m/s]
+wheel_base = 0.4;                         % Wheel-base (for bicycle model) [m]
+time_step = 0.1;                          % Discrete time step [s] - 10 Hz
+num_steps = 400;                          % Total simulation steps
 simulation_time = num_steps * time_step;  % Total simulation time [s]
 
 %% Process Noise (Motion Model Uncertainty)
@@ -31,21 +37,16 @@ simulation_time = num_steps * time_step;  % Total simulation time [s]
 process_noise_velocity = 0.05;       % Linear velocity noise [m/s/sqrt(s)]
 process_noise_yaw_rate = deg2rad(2); % Yaw rate noise [rad/s/sqrt(s)]
 
-%% Measurement Noise (Sensor Uncertainty)
-% LMS200 laser scanner parameters
+%% Measurement Noise
 measurement_noise_range = 0.01;      % Range measurement noise [m]
 max_range = 8;                       % Maximum sensor range [m]
 
-%% Initial Conditions
-
-% Ground truth trajectory storage
+%% Ground-truth Trajectory
 true_trajectory = zeros(3, num_steps);      % [x; y; theta]
 control_history = zeros(2, num_steps);      % [v; omega]
 true_trajectory(:, 1) = [1; 1; 0];          % Start at (1,1) heading east
 
-%% Generate Ground Truth Trajectory (Bicycle Model)
 for k = 1:num_steps-1
-    % Simple "square" command pattern: drive straight, then turn
     if mod(k, 100) < 75
         control_history(:, k) = [nominal_velocity; 0];
     else
@@ -65,20 +66,18 @@ for k = 1:num_steps-1
 end
 
 %% Dead Reckoning (Open Loop)
-% Accumulates drift via random walk - errors compound over time
 dead_reckoning_trajectory = zeros(3, num_steps);
 dead_reckoning_trajectory(:, 1) = true_trajectory(:, 1);
 
-% Noise parameters for random walk drift (continuous-time diffusion)
+% Noise parameters for random walk drift
 drift_noise_x = 0.005;            % Position drift diffusion [m/sqrt(s)]
 drift_noise_y = 0.005;            % Position drift diffusion [m/sqrt(s)]
 drift_noise_theta = deg2rad(0.2); % Heading drift diffusion [rad/sqrt(s)]
 
-% Initialize accumulated drift (starts at zero, grows as random walk)
+% Initialize accumulated drift
 accumulated_drift = [0; 0; 0];
 
 for k = 1:num_steps-1
-    % Random walk: accumulate drift proportional to sqrt(time_step)
     accumulated_drift = accumulated_drift + [
         drift_noise_x * randn * sqrt(time_step);
         drift_noise_y * randn * sqrt(time_step);
@@ -95,7 +94,6 @@ for k = 1:num_steps-1
         omega * time_step
     ];
 
-    % Add accumulated drift to get dead reckoning estimate
     dead_reckoning_trajectory(:, k+1) = propagated_state + accumulated_drift;
 end
 
@@ -109,11 +107,15 @@ process_noise_d = process_noise_velocity * sqrt(time_step);      % Distance incr
 process_noise_beta = process_noise_yaw_rate * sqrt(time_step);   % Heading increment noise [rad]
 Q = diag([process_noise_d^2, process_noise_beta^2]);
 
-% Storage for plotting
 estimated_trajectory = zeros(3, num_steps);
 estimated_trajectory(:, 1) = estimated_state;
 
+% Storage for covariance history
+covariance_history = zeros(3, num_steps);
+covariance_history(:, 1) = sqrt(diag(P));  % Store standard deviations
+
 %% Main EKF Loop
+
 for k = 2:num_steps
     % Simulate odometry sensors
     state_delta = true_trajectory(:, k) - true_trajectory(:, k-1);
@@ -154,22 +156,23 @@ for k = 2:num_steps
     % Predict covariance
     P_predicted = A * P * A' + W * Q * W';
 
-    %% Generate Laser Scan (from true pose)
-    scan = lms_scan(true_trajectory(:, k), map_lines, max_range, measurement_noise_range, 'LMS100');
+    %% EKF UPDATE STEP
+    scan = lms_scan(true_trajectory(:, k), map_lines, ...
+        max_range, measurement_noise_range, 'LMS100');
+    
+    % Lines are observed in the Hessse form
+    lines_observed = ransac_lines(scan, 0.02, 5);  
 
-    %% Extract Line Features using RANSAC
-    lines_observed = ransac_lines(scan, 0.02, 5);  % (alpha, d) + covariances
-
-    %% EKF UPDATE STEP - Process Each Observed Line
     for j = 1:size(lines_observed, 1)
         alpha_observed = lines_observed(j, 1);  % Angle of line normal (robot frame)
         d_observed = lines_observed(j, 2);      % Distance to line (robot frame)
         sigma_alpha = lines_observed(j, 3);     % Angular uncertainty
         sigma_d = lines_observed(j, 4);         % Distance uncertainty
+        
+        %% Data association (matching)
 
-        % Data association should be performed.
-        % Basically, try to match the real lines with the ones we observe
-        % from the robot itself. Since the real lines are parameterized
+        % Try to match the real lines with the ones we observe
+        % from the robot itself.  Since the real lines are parameterized
         % in the world frame, we should apply a frame transformation.
         theta_predicted = predicted_state(3);
         alpha_world = alpha_observed + theta_predicted;
@@ -178,7 +181,9 @@ for k = 2:num_steps
         % for each observed line.
         angle_differences = zeros(num_walls, 1);
         for w = 1:num_walls
-            angle_differences(w) = abs(atan2(sin(map_lines(w, 1) - alpha_world), cos(map_lines(w, 1) - alpha_world)));
+            angle_differences(w) = ...
+                abs(atan2(sin(map_lines(w, 1) - alpha_world), ...
+                cos(map_lines(w, 1) - alpha_world)));
         end
         [~, idx] = min(angle_differences);
         alpha_map = map_lines(idx, 1);  % Map line angle (world frame)
@@ -203,8 +208,17 @@ for k = 2:num_steps
         % Measurement noise covariance
         R = diag([sigma_alpha^2, sigma_d^2]);
 
+        % Reject outliers using Mahalanobis distance
+        S = H * P_predicted * H' + R; % Innovation covariance
+        mahalanobis_dist = innovation' / S * innovation;
+        chi2_threshold = 9.21;  % 99% confidence for 2 DOF (chi-squared distribution)
+
+        if mahalanobis_dist > chi2_threshold
+            % Reject this measurement as an outlier
+            continue;
+        end
+
         % Kalman update equations
-        S = H * P_predicted * H' + R;           % Innovation covariance
         K = P_predicted * H' / S;               % Kalman gain
         predicted_state = predicted_state + K * innovation;
         P_predicted = (eye(3) - K * H) * P_predicted;
@@ -214,111 +228,13 @@ for k = 2:num_steps
     estimated_state = predicted_state;
     P = P_predicted;
     estimated_trajectory(:, k) = estimated_state;
+    covariance_history(:, k) = sqrt(diag(P));  % Store standard deviations
 end
 
 %% Compute Estimation Errors
 position_error_dr = sqrt(sum((dead_reckoning_trajectory(1:2, :) - true_trajectory(1:2, :)).^2, 1));
 position_error_ekf = sqrt(sum((estimated_trajectory(1:2, :) - true_trajectory(1:2, :)).^2, 1));
 time_vector = (0:num_steps-1) * time_step;
-
-%% Visualization
-figure('Name', 'Line-EKF with LMS200 Laser Scanner', 'Position', [50 50 1400 900]);
-
-% Plot 1: 2D Trajectory with Map
-subplot(2, 3, 1);
-hold on; grid on; axis equal;
-% Draw map walls
-for w = 1:num_walls
-    alpha = map_lines(w, 1);
-    d = map_lines(w, 2);
-    n = [cos(alpha), sin(alpha)];
-    % Two points on the line (±20m along the line)
-    p1 = d * n + 20 * [-n(2), n(1)];
-    p2 = d * n - 20 * [-n(2), n(1)];
-    plot([p1(1) p2(1)], [p1(2) p2(2)], 'k-', 'LineWidth', 1.5);
-end
-plot(true_trajectory(1, :), true_trajectory(2, :), 'b-', 'LineWidth', 2, 'DisplayName', 'True');
-plot(dead_reckoning_trajectory(1, :), dead_reckoning_trajectory(2, :), 'c--', 'LineWidth', 1.5, 'DisplayName', 'Dead Reckoning');
-plot(estimated_trajectory(1, :), estimated_trajectory(2, :), 'r--', 'LineWidth', 2, 'DisplayName', 'Line-EKF');
-plot(true_trajectory(1, 1), true_trajectory(2, 1), 'go', 'MarkerSize', 12, 'MarkerFaceColor', 'g');
-xlabel('X [m]'); ylabel('Y [m]');
-title('Trajectory with Map Walls');
-legend('Ground truth', 'Dead Reckoning', 'Line-EKF', 'Start', 'Location', 'best');
-
-% Plot 2: X Position
-subplot(2, 3, 2);
-plot(time_vector, true_trajectory(1, :), 'b-', 'LineWidth', 1.5); hold on;
-plot(time_vector, dead_reckoning_trajectory(1, :), 'c--', 'LineWidth', 1.5);
-plot(time_vector, estimated_trajectory(1, :), 'r--', 'LineWidth', 1.5);
-xlabel('Time [s]'); ylabel('X [m]');
-title('X Position');
-legend('Ground truth', 'Dead Reckoning', 'Line-EKF');
-grid on;
-
-% Plot 3: Y Position
-subplot(2, 3, 3);
-plot(time_vector, true_trajectory(2, :), 'b-', 'LineWidth', 1.5); hold on;
-plot(time_vector, dead_reckoning_trajectory(2, :), 'c--', 'LineWidth', 1.5);
-plot(time_vector, estimated_trajectory(2, :), 'r--', 'LineWidth', 1.5);
-xlabel('Time [s]'); ylabel('Y [m]');
-title('Y Position');
-legend('Ground truth', 'Dead Reckoning', 'Line-EKF');
-grid on;
-
-% Plot 4: Heading Angle
-subplot(2, 3, 4);
-plot(time_vector, rad2deg(true_trajectory(3, :)), 'b-', 'LineWidth', 1.5); hold on;
-plot(time_vector, rad2deg(dead_reckoning_trajectory(3, :)), 'c--', 'LineWidth', 1.5);
-plot(time_vector, rad2deg(estimated_trajectory(3, :)), 'r--', 'LineWidth', 1.5);
-xlabel('Time [s]'); ylabel('Heading [deg]');
-title('Heading Angle');
-legend('Ground truth', 'Dead Reckoning', 'Line-EKF');
-grid on;
-
-% Plot 5: Position Error
-subplot(2, 3, 5);
-plot(time_vector, position_error_dr, 'c-', 'LineWidth', 1.5); hold on;
-plot(time_vector, position_error_ekf, 'r-', 'LineWidth', 2);
-xlabel('Time [s]'); ylabel('Position Error [m]');
-title('Position Estimation Error');
-legend('Dead Reckoning', 'Line-EKF');
-grid on;
-
-% Plot 6: State Uncertainty (Covariance)
-subplot(2, 3, 6);
-% Note: variance_history not stored in original, so we can't plot it
-% Just show a placeholder
-text(0.5, 0.5, 'Covariance history not stored', 'HorizontalAlignment', 'center');
-axis off;
-
-%% Visualize Map with Laser Scans
-figure('Name', 'Map with Laser Scan Overlay', 'Color', 'w');
-hold on; grid on; axis equal;
-
-% Draw map walls
-for w = 1:num_walls
-    alpha = map_lines(w, 1);
-    d = map_lines(w, 2);
-    n = [cos(alpha), sin(alpha)];
-    p1 = d * n + 20 * [-n(2), n(1)];
-    p2 = d * n - 20 * [-n(2), n(1)];
-    plot([p1(1) p2(1)], [p1(2) p2(2)], 'k-', 'LineWidth', 2);
-end
-
-% Overlay laser scans every 20 steps
-plot(true_trajectory(1, 1), true_trajectory(2, 1), 'ko', 'MarkerSize', 8, 'MarkerFaceColor', 'k');
-for k = 1:20:num_steps
-    scan = lms_scan(true_trajectory(:, k), map_lines, max_range, measurement_noise_range, 'LMS100');
-    valid = ~isnan(scan(:, 1));
-    xy = scan(valid, 1) .* [cos(scan(valid, 2) + true_trajectory(3, k)), ...
-                            sin(scan(valid, 2) + true_trajectory(3, k))];
-    plot(true_trajectory(1, k) + xy(:, 1), true_trajectory(2, k) + xy(:, 2), '.', 'Color', 0.7*[1 0 0]);
-    plot(true_trajectory(1, k), true_trajectory(2, k), 'bo', 'MarkerFaceColor', 'b');
-end
-
-title('Map + Laser Returns (every 20 steps)');
-xlabel('X [m]'); ylabel('Y [m]');
-legend('Walls', 'Start', 'Scan points', 'Robot', 'Location', 'NorthOutside');
 
 %% Display Statistics
 fprintf('\n========== Line-EKF with LMS200 Laser Scanner - Results ==========\n');
@@ -345,3 +261,147 @@ fprintf('  Final Position Error:   %.3f m\n', position_error_ekf(end));
 fprintf('  Mean Position Error:    %.3f m\n', mean(position_error_ekf));
 fprintf('  Max Position Error:     %.3f m\n', max(position_error_ekf));
 fprintf('===================================================================\n\n');
+
+%% Visualization
+fig_animation = figure('Name', 'EKF Animation', 'Position', [50 50 1400 800]);
+
+subplot(2, 2, [1 3]);
+hold on; grid on; axis equal;
+
+% Draw map walls once
+for w = 1:num_walls
+    alpha = map_lines(w, 1);
+    d = map_lines(w, 2);
+    n = [cos(alpha), sin(alpha)];
+    p1 = d * n + 20 * [-n(2), n(1)];
+    p2 = d * n - 20 * [-n(2), n(1)];
+    plot([p1(1) p2(1)], [p1(2) p2(2)], 'k-', 'LineWidth', 2);
+end
+
+h_true_traj = plot(true_trajectory(1, 1), true_trajectory(2, 1), 'b-', 'LineWidth', 2);
+h_dead_traj = plot(dead_reckoning_trajectory(1, 1), dead_reckoning_trajectory(2, 1), 'c--', 'LineWidth', 1.5);
+h_est_traj = plot(estimated_trajectory(1, 1), estimated_trajectory(2, 1), 'r--', 'LineWidth', 2);
+h_true_robot = plot(true_trajectory(1, 1), true_trajectory(2, 1), 'bo', 'MarkerSize', 12, 'MarkerFaceColor', 'b');
+h_est_robot = plot(estimated_trajectory(1, 1), estimated_trajectory(2, 1), 'ro', 'MarkerSize', 12, 'MarkerFaceColor', 'r');
+h_scan = plot(NaN, NaN, 'r.', 'MarkerSize', 4);
+h_rays = plot(NaN, NaN, 'Color', [1 0.5 0.5], 'LineWidth', 0.5);  % Light red rays
+h_observed_lines = [];  % Will hold multiple line handles
+
+xlabel('X [m]'); ylabel('Y [m]');
+title('Spatial View');
+
+h_map = plot(NaN, NaN, 'k-', 'LineWidth', 2);
+h_lidar_rays = plot(NaN, NaN, 'Color', [1 0.5 0.5], 'LineWidth', 0.5);
+h_lidar_points = plot(NaN, NaN, 'r.', 'MarkerSize', 4);
+h_observed = plot(NaN, NaN, 'g-', 'LineWidth', 2);
+
+legend([h_map, h_true_traj, h_dead_traj, h_est_traj, h_lidar_rays, h_lidar_points, h_observed], ...
+       {'Map Walls', 'True Trajectory', 'Dead Reckoning', 'EKF Estimate', ...
+        'LiDAR Rays', 'LiDAR Points', 'Observed Lines'}, ...
+       'Location', 'best', 'AutoUpdate', 'off');
+xlim([-5 12]); ylim([-5 12]);
+
+subplot(2, 2, 2);
+hold on; grid on;
+h_error_dr = plot(time_vector(1), position_error_dr(1), 'c-', 'LineWidth', 1.5);
+h_error_ekf = plot(time_vector(1), position_error_ekf(1), 'r-', 'LineWidth', 2);
+xlabel('Time [s]'); ylabel('Position Error [m]');
+title('Position Error');
+legend('Dead Reckoning', 'Line-EKF', 'Location', 'best', 'AutoUpdate', 'off');
+xlim([0 simulation_time]); ylim([0 max(max(position_error_dr), max(position_error_ekf)) * 1.1]);
+
+subplot(2, 2, 4);
+hold on; grid on;
+h_cov_x = plot(time_vector(1), covariance_history(1, 1), 'r-', 'LineWidth', 1.5);
+h_cov_y = plot(time_vector(1), covariance_history(2, 1), 'g-', 'LineWidth', 1.5);
+h_cov_theta = plot(time_vector(1), rad2deg(covariance_history(3, 1)), 'b-', 'LineWidth', 1.5);
+xlabel('Time [s]'); ylabel('Standard Deviation');
+title('EKF Uncertainty ($\sigma$)');
+legend('$\sigma_x$ [m]', '$\sigma_y$ [m]', '$\sigma_\theta$ [deg]', 'Location', 'best', 'AutoUpdate', 'off');
+xlim([0 simulation_time]);
+ylim([0 max([max(covariance_history(1:2, :)), rad2deg(max(covariance_history(3, :)))]) * 1.1]);
+
+animation_step = 5; 
+for k = 1:animation_step:num_steps
+    subplot(2, 2, [1 3]);
+
+    set(h_true_traj, 'XData', true_trajectory(1, 1:k), 'YData', true_trajectory(2, 1:k));
+    set(h_dead_traj, 'XData', dead_reckoning_trajectory(1, 1:k), 'YData', dead_reckoning_trajectory(2, 1:k));
+    set(h_est_traj, 'XData', estimated_trajectory(1, 1:k), 'YData', estimated_trajectory(2, 1:k));
+
+    set(h_true_robot, 'XData', true_trajectory(1, k), 'YData', true_trajectory(2, k));
+    set(h_est_robot, 'XData', estimated_trajectory(1, k), 'YData', estimated_trajectory(2, k));
+
+    scan = lms_scan(true_trajectory(:, k), map_lines, max_range, measurement_noise_range, 'LMS100');
+    valid = ~isnan(scan(:, 1));
+
+    if any(valid)
+        theta_k = true_trajectory(3, k);
+        robot_pos = true_trajectory(1:2, k);
+
+        scan_xy = scan(valid, 1) .* [cos(scan(valid, 2) + theta_k), sin(scan(valid, 2) + theta_k)];
+        scan_world = [robot_pos(1) + scan_xy(:, 1), robot_pos(2) + scan_xy(:, 2)];
+        set(h_scan, 'XData', scan_world(:, 1), 'YData', scan_world(:, 2));
+
+        n_rays = sum(valid);
+        ray_x = zeros(3 * n_rays, 1);
+        ray_y = zeros(3 * n_rays, 1);
+        for i = 1:n_rays
+            idx = 3 * (i - 1);
+            ray_x(idx + 1) = robot_pos(1);
+            ray_y(idx + 1) = robot_pos(2);
+            ray_x(idx + 2) = scan_world(i, 1);
+            ray_y(idx + 2) = scan_world(i, 2);
+            ray_x(idx + 3) = NaN;  % Break between rays
+            ray_y(idx + 3) = NaN;
+        end
+        set(h_rays, 'XData', ray_x, 'YData', ray_y);
+    else
+        set(h_scan, 'XData', NaN, 'YData', NaN);
+        set(h_rays, 'XData', NaN, 'YData', NaN);
+    end
+
+    lines_observed = ransac_lines(scan, 0.02, 5);
+
+    if ~isempty(h_observed_lines)
+        delete(h_observed_lines(isvalid(h_observed_lines)));
+    end
+    h_observed_lines = [];
+
+    theta_k = true_trajectory(3, k);
+    robot_pos = true_trajectory(1:2, k);
+    R = [cos(theta_k) -sin(theta_k); sin(theta_k) cos(theta_k)];
+
+    for j = 1:size(lines_observed, 1)
+        alpha_robot = lines_observed(j, 1);
+        d_robot = lines_observed(j, 2);
+
+        n_robot = [cos(alpha_robot); sin(alpha_robot)];
+        tangent_robot = [-sin(alpha_robot); cos(alpha_robot)];
+
+        center_robot = d_robot * n_robot;
+        center_world = robot_pos + R * center_robot;
+        tangent_world = R * tangent_robot;
+
+        p1 = center_world + 3 * tangent_world;
+        p2 = center_world - 3 * tangent_world;
+
+        h = plot([p1(1) p2(1)], [p1(2) p2(2)], 'g-', 'LineWidth', 2);
+        h_observed_lines = [h_observed_lines; h];
+    end
+
+    subplot(2, 2, 2);
+    set(h_error_dr, 'XData', time_vector(1:k), 'YData', position_error_dr(1:k));
+    set(h_error_ekf, 'XData', time_vector(1:k), 'YData', position_error_ekf(1:k));
+
+    subplot(2, 2, 4);
+    set(h_cov_x, 'XData', time_vector(1:k), 'YData', covariance_history(1, 1:k));
+    set(h_cov_y, 'XData', time_vector(1:k), 'YData', covariance_history(2, 1:k));
+    set(h_cov_theta, 'XData', time_vector(1:k), 'YData', rad2deg(covariance_history(3, 1:k)));
+
+    drawnow('limitrate');
+    pause(0.05);
+end
+
+figure(fig_animation);
+fprintf('Animation complete!\n');
