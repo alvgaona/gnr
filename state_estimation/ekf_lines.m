@@ -109,7 +109,7 @@ estimated_trajectory(:, 1) = estimated_state;
 
 % Storage for covariance history
 covariance_history = zeros(3, num_steps);
-covariance_history(:, 1) = sqrt(diag(P));  % Store standard deviations
+covariance_history(:, 1) = sqrt(diag(P));
 
 %% Main EKF Loop
 
@@ -151,7 +151,7 @@ for k = 2:num_steps
     ];
 
     % Predict covariance
-    P_predicted = A * P * A' + W * Q * W';
+    P = A * P * A' + W * Q * W';
 
     %% EKF UPDATE STEP
     scan = lms_scan(true_trajectory(:, k), map_lines, ...
@@ -205,7 +205,7 @@ for k = 2:num_steps
         R = diag([sigma_alpha^2, sigma_d^2]);
 
         % Reject outliers using Mahalanobis distance
-        S = H * P_predicted * H' + R; % Innovation covariance
+        S = H * P * H' + R; % Innovation covariance
         mahalanobis_dist = innovation' / S * innovation;
         chi2_threshold = 9.21;  % 99% confidence for 2 DOF (chi-squared distribution)
 
@@ -215,14 +215,13 @@ for k = 2:num_steps
         end
 
         % Kalman update equations
-        K = P_predicted * H' / S;               % Kalman gain
+        K = P * H' / S;               % Kalman gain
         predicted_state = predicted_state + K * innovation;
-        P_predicted = (eye(3) - K * H) * P_predicted;
+        P = (eye(3) - K * H) * P;
     end
 
     %% Store Results
     estimated_state = predicted_state;
-    P = P_predicted;
     estimated_trajectory(:, k) = estimated_state;
     covariance_history(:, k) = sqrt(diag(P));  % Store standard deviations
 end
