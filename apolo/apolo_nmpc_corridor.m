@@ -2,7 +2,7 @@ clc; clear; close all;
 
 %% Environment. Vertical corridor with parallel walls
 corridor_width = 20;  % Corridor width [m]
-corridor_length = 50; % Corridor length [m]
+corridor_length = 2; % Corridor length [m]
 
 % Define obstacles as cell array
 obstacles = {};
@@ -12,20 +12,27 @@ obstacles{end+1} = struct('type', 'wall', 'p1', [corridor_width/2; -1], 'p2', [c
 obstacles{end+1} = struct('type', 'wall', 'p1', [-corridor_width/2; -1], 'p2', [-corridor_width/2; corridor_length]);
 
 % Square obstacle in center of corridor
-obstacle_center = [0.3; 5]; % Center position [x; y] (offset slightly from center)
-obstacle_size = 1.0;        % Square side length [m] (reduced from 1.2)
+WorldXML = readstruct("DafneLongCorridorNoBeacons.xml","FileType","xml");
+if isfield(WorldXML.World,'PrismaticPart')
+    coords = double(split(extractBetween(WorldXML.World.PrismaticPart.position, "{", "}"), ","));
+    obstacle_center = [coords(1); coords(2)];
+else
+    obstacle_center = [8; 2]; % Center position [x; y] (offset slightly from center)
+end
+obstacle_size = 0.5;        % Square side length [m] (reduced from 1.2)
 obstacles{end+1} = struct('type', 'square', 'center', obstacle_center, 'size', obstacle_size);
 
 %% LiDAR Configuration
 max_range = 10.0;       % Maximum sensor range [m]
 noise_std = 0.02;       % Range measurement noise [m]
-lidar_model = 'LMS200'; % 180-degree FOV, 181 beams
-robotName = 'Dafne';
+lidar_model = 'LMS100'; % 180-degree FOV, 181 beams
+robotName = convertStringsToChars(WorldXML.World.Pioneer3ATSim.nameAttribute);%LMS100Sim %LandMark mark_id="1"
+%laserName = convertStringsToChars(WorldXML.World.LMS100Sim.nameAttribute);%'LMS100';
 
 %% CBF Parameters
-d_safe = 0.3;           % Safety radius [m]
-alpha_cbf = 0.1;        % CBF aggressiveness parameter
-scan_downsample = 20;   % Use every Nth LiDAR beam
+d_safe = 0.4;           % Safety radius [m]
+alpha_cbf = 0.3;        % CBF aggressiveness parameter
+scan_downsample = 50;   % Use every Nth LiDAR beam
 constraint_range = 2.0; % Only use obstacles within this distance [m]
 
 %% NMPC Configuration
@@ -34,8 +41,8 @@ nu = 2;  % inputs: [v, omega]
 
 dt = 0.1;               % Sample time [s]
 N = 10;                 % Prediction horizon
-Q = diag([5, 10, 0.5]); % State tracking weights [x, y, theta]
-R = diag([0.01, 0.5]);  % Control effort weights [v, omega]
+Q = diag([1, 1, 0.1]); % State tracking weights [x, y, theta]
+R = diag([1, 1]);  % Control effort weights [v, omega]
 
 % Control constraints
 v_min = 0;
@@ -44,19 +51,19 @@ omega_min = -2;
 omega_max = 2;
 
 %% Reference Trajectory
-Tsim = 50;
+Tsim = 30;
 t = 0:dt:Tsim;
 
 % Straight vertical trajectory through center of corridor
 v_ref = 0.8;  % Reference speed [m/s]
-x_ref = zeros(size(t));      % Stay centered in x
-y_ref = v_ref * t;           % Move upward at constant speed
-theta_ref = pi/2 * ones(size(t));  % Point upward (90 degrees)
+x_ref = v_ref * t;%zeros(size(t));   % Stay centered in x
+y_ref = ones(size(t))*obstacle_center(2);%v_ref * t % Move upward at constant speed
+theta_ref = zeros(size(t));%pi/2 * ones(size(t));    % Point upward (90 degrees)
 
 xref = [x_ref', y_ref', theta_ref'];
 
 %% Initial State
-x0 = [0; 0; pi/2];  % Start at bottom of corridor, centered, pointing up
+x0 = [1.3; obstacle_center(2); 0];%[0; 0; pi/2];  % Start at bottom of corridor, centered, pointing up
 if apoloPlaceMRobot(robotName,[x0(1),x0(2),0],x0(3))~=1
     disp("Error placing "+robotName+" on position");
     return
@@ -86,7 +93,7 @@ for k = 1:length(t)-1
     b=size(scan);                 %LMS200->181 measures, last one is always 0, 180º
     ang = 1:b(2);
     if b(2) > 181
-        ang = ang*(1.5*pi/b(2));
+        ang = (ang-270)*(1.5*pi/b(2));
     else
 	    scan = scan(1:180);
         ang = 1:180;
