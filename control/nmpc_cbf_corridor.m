@@ -1,6 +1,6 @@
 clc; clear; close all;
 
-%% Environment. Vertical corridor with parallel walls
+%% Environment. Horizontal corridor with parallel walls
 corridor_width = 4;  % Corridor width [m]
 corridor_length = 12; % Corridor length [m]
 
@@ -8,11 +8,11 @@ corridor_length = 12; % Corridor length [m]
 obstacles = {};
 
 % Corridor walls (finite line segments)
-obstacles{end+1} = struct('type', 'wall', 'p1', [corridor_width/2; -1], 'p2', [corridor_width/2; corridor_length]);
-obstacles{end+1} = struct('type', 'wall', 'p1', [-corridor_width/2; -1], 'p2', [-corridor_width/2; corridor_length]);
+obstacles{end+1} = struct('type', 'wall', 'p1', [-1; corridor_width/2], 'p2', [corridor_length; corridor_width/2]);
+obstacles{end+1} = struct('type', 'wall', 'p1', [-1; -corridor_width/2], 'p2', [corridor_length; -corridor_width/2]);
 
 % Square obstacle in center of corridor
-obstacle_center = [0.3; 5]; % Center position [x; y] (offset slightly from center)
+obstacle_center = [5; 0]; % Center position [x; y] (centered in corridor)
 obstacle_size = 1.0;        % Square side length [m] (reduced from 1.2)
 obstacles{end+1} = struct('type', 'square', 'center', obstacle_center, 'size', obstacle_size);
 
@@ -22,9 +22,9 @@ noise_std = 0.02;       % Range measurement noise [m]
 lidar_model = 'LMS200'; % 180-degree FOV, 181 beams
 
 %% CBF Parameters
-d_safe = 0.3;           % Safety radius [m]
-alpha_cbf = 0.2;        % CBF aggressiveness parameter
-scan_downsample = 20;   % Use every Nth LiDAR beam
+d_safe = 0.6;           % Safety radius [m]
+alpha_cbf = 1.0;        % CBF aggressiveness parameter (lower will react earlier)
+scan_downsample = 50;   % Downsample scans to reduce CBF constraints
 constraint_range = 2.0; % Only use obstacles within this distance [m]
 
 %% NMPC Configuration
@@ -32,9 +32,9 @@ nx = 3;  % states: [x, y, theta]
 nu = 2;  % inputs: [v, omega]
 
 dt = 0.1;               % Sample time [s]
-N = 10;                 % Prediction horizon
-Q = diag([5, 10, 0.5]); % State tracking weights [x, y, theta]
-R = diag([0.01, 0.5]);  % Control effort weights [v, omega]
+N = 20;                 % Prediction horizon
+Q = diag([1, 1, 0.1]); % State tracking weights [x, y, theta]
+R = diag([1, 1]);  % Control effort weights [v, omega]
 
 % Control constraints
 v_min = 0;
@@ -43,19 +43,19 @@ omega_min = -2;
 omega_max = 2;
 
 %% Reference Trajectory
-Tsim = 50;
+Tsim = 100;
 t = 0:dt:Tsim;
 
-% Straight vertical trajectory through center of corridor
-v_ref = 0.8;  % Reference speed [m/s]
-x_ref = zeros(size(t));      % Stay centered in x
-y_ref = v_ref * t;           % Move upward at constant speed
-theta_ref = pi/2 * ones(size(t));  % Point upward (90 degrees)
+% Straight horizontal trajectory through center of corridor
+v_ref = 0.8;                 % Reference speed [m/s]
+x_ref = v_ref * t;           % Move horizontally at constant speed
+y_ref = zeros(size(t));      % Stay centered in corridor
+theta_ref = zeros(size(t));  % Point along x-axis (0 degrees)
 
 xref = [x_ref', y_ref', theta_ref'];
 
 %% Initial State
-x0 = [0; 0; pi/2];  % Start at bottom of corridor, centered, pointing up
+x0 = [0; 0; 0];  % Start at left of corridor, centered, pointing right
 
 %% Simulation Loop
 X = x0';
@@ -67,8 +67,8 @@ lastMV = [0; 0];
 scan_history = {};
 
 fprintf('Starting NMPC simulation with CBF obstacle avoidance...\n');
-fprintf('Corridor width: %.1fm, Obstacle at [%.1f, %.1f], size: %.2fm\n', ...
-        corridor_width, obstacle_center(1), obstacle_center(2), obstacle_size);
+fprintf('Horizontal corridor: width %.1fm, length %.1fm\n', corridor_width, corridor_length);
+fprintf('Obstacle at [%.1f, %.1f], size: %.2fm\n', obstacle_center(1), obstacle_center(2), obstacle_size);
 fprintf('Safety radius: %.2fm\n', d_safe);
 
 for k = 1:length(t)-1
@@ -125,9 +125,6 @@ end
 
 fprintf('Simulation complete!\n');
 
-%% Update todos
-% Mark tasks as completed
-
 %% Visualization
 figure('Position', [100 100 1600 900]);
 movegui('center');
@@ -136,9 +133,9 @@ movegui('center');
 subplot(2,3,1);
 hold on; grid on; axis equal;
 
-% Draw corridor walls (vertical lines)
-plot([corridor_width/2, corridor_width/2], [-1, 15], 'k-', 'LineWidth', 2);
-plot([-corridor_width/2, -corridor_width/2], [-1, 15], 'k-', 'LineWidth', 2);
+% Draw corridor walls (horizontal lines)
+plot([-1, corridor_length], [corridor_width/2, corridor_width/2], 'k-', 'LineWidth', 2);
+plot([-1, corridor_length], [-corridor_width/2, -corridor_width/2], 'k-', 'LineWidth', 2);
 
 % Draw square obstacle
 half_size = obstacle_size / 2;
@@ -155,19 +152,19 @@ plot(X(end,1), X(end,2), 'ro', 'MarkerSize', 10, 'MarkerFaceColor', 'r');
 
 xlabel('$x$ [m]', 'Interpreter', 'latex');
 ylabel('$y$ [m]', 'Interpreter', 'latex');
-title('Vertical Corridor Navigation', 'Interpreter', 'latex');
+title('Horizontal Corridor Navigation', 'Interpreter', 'latex');
 legend('Wall', '', 'Obstacle', '', 'Reference', 'NMPC+CBF', 'Start', 'End', ...
        'Interpreter', 'latex', 'Location', 'best');
-xlim([-3, 3]);
-ylim([-1, 13]);
+xlim([-1, 13]);
+ylim([-3, 3]);
 
 %% 2. LiDAR visualization at selected timesteps
 subplot(2,3,2);
 hold on; grid on; axis equal;
 
 % Draw corridor and obstacle for reference
-plot([corridor_width/2, corridor_width/2], [-1, 15], 'k-', 'LineWidth', 1);
-plot([-corridor_width/2, -corridor_width/2], [-1, 15], 'k-', 'LineWidth', 1);
+plot([-1, corridor_length], [corridor_width/2, corridor_width/2], 'k-', 'LineWidth', 1);
+plot([-1, corridor_length], [-corridor_width/2, -corridor_width/2], 'k-', 'LineWidth', 1);
 plot(x_square, y_square, 'r-', 'LineWidth', 1);
 
 % Show LiDAR scans at a few timesteps
@@ -197,8 +194,8 @@ end
 xlabel('$x$ [m]', 'Interpreter', 'latex');
 ylabel('$y$ [m]', 'Interpreter', 'latex');
 title('LiDAR Scans at Different Times', 'Interpreter', 'latex');
-xlim([-3, 3]);
-ylim([-1, 13]);
+xlim([-1, 13]);
+ylim([-3, 3]);
 
 %% 3. Control inputs
 subplot(2,3,3);
@@ -260,13 +257,13 @@ grid on;
 sgtitle('NMPC with CBF Obstacle Avoidance in Corridor', 'Interpreter', 'latex');
 
 %% Animation
-figure('Position', [100 100 900 1000]);
+figure('Position', [100 100 1200 600]);
 movegui('center');
 hold on; grid on; axis equal;
 
 % Draw static elements
-plot([corridor_width/2, corridor_width/2], [-1, corridor_length], 'k-', 'LineWidth', 3);
-plot([-corridor_width/2, -corridor_width/2], [-1, corridor_length], 'k-', 'LineWidth', 3);
+plot([-1, corridor_length], [corridor_width/2, corridor_width/2], 'k-', 'LineWidth', 3);
+plot([-1, corridor_length], [-corridor_width/2, -corridor_width/2], 'k-', 'LineWidth', 3);
 plot(x_square, y_square, 'r-', 'LineWidth', 3);
 fill(x_square, y_square, [1 0.8 0.8], 'FaceAlpha', 0.5, 'EdgeColor', 'r', 'LineWidth', 2);
 
@@ -295,11 +292,11 @@ xlabel('$x$ [m]', 'Interpreter', 'latex', 'FontSize', 14);
 ylabel('$y$ [m]', 'Interpreter', 'latex', 'FontSize', 14);
 title('LiDAR CBF + NMPC Path Following', 'Interpreter', 'latex', 'FontSize', 16);
 legend('Walls', '', 'Obstacle', '', 'Reference', 'Location', 'northeast');
-xlim([-10, 10]);
-ylim([-1, 13]);
+xlim([-1, 13]);
+ylim([-3, 3]);
 
 % Time display
-time_text = text(-2.2, 12, '', 'FontSize', 12, 'BackgroundColor', 'white');
+time_text = text(0.5, 2.5, '', 'FontSize', 12, 'BackgroundColor', 'white');
 
 % Animation loop
 playback_speed = 3;  % Play every Nth frame for speed
