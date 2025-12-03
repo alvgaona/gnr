@@ -73,16 +73,19 @@
 				</position>
 			</face>
 		</FaceSetPart>
-		<Pioneer3ATSim intersectable="false" name="Dafne" id="2">
+		<Pioneer3ATSim name="Dafne" id="2">
 			<orientation>
 				{0,-0,1.5708}
 			</orientation>
-			<odometry seconds="1761837828" microseconds="958000">
+			<position>
+				{2.76148e-07,39.9932,0}
+			</position>
+			<odometry seconds="1764762979" microseconds="351000">
 				<orientation>
-					{-0,-0,-0.155824}
+					{0,-0,-1.75398}
 				</orientation>
 				<position>
-					{-261.301,25.3404,0}
+					{-253.597,-26.6183,0}
 				</position>
 			</odometry>
 		</Pioneer3ATSim>
@@ -103,7 +106,7 @@
 				{0,0,0.785398}
 			</orientation>
 			<position>
-				{0,5,0}
+				{0.3,5,0}
 			</position>
 			<face>
 				<vertex>
