@@ -17,9 +17,8 @@ obstacle_size = 1.0;        % Square side length [m] (reduced from 1.2)
 obstacles{end+1} = struct('type', 'square', 'center', obstacle_center, 'size', obstacle_size);
 
 %% LiDAR Configuration
-max_range = 10.0;       % Maximum sensor range [m]
-noise_std = 0.02;       % Range measurement noise [m]
-lidar_model = 'LMS100'; % 180-degree FOV, 181 beams
+scanner = LMSScanner('LMS100', 'MaxRange', 10.0, 'NoiseStd', 0.02);
+scanner.info();
 
 %% NMPC Configuration
 controller = NMPCCBFController(...
@@ -72,7 +71,7 @@ fprintf('Safety radius: %.2fm\n', d_safe);
 
 for k = 1:length(t)-1
     %% Get LiDAR scan
-    scan = lms_scan_new(x, obstacles, max_range, noise_std, lidar_model);
+    scan = scanner.scan(x, obstacles);
     scan_history{k} = scan;
 
     % Compute control using:
