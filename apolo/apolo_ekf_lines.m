@@ -151,15 +151,18 @@ for k = 2:num_steps
     %% EKF UPDATE STEP
     scan = apoloGetLaserData(laserName);%lms_scan(true_trajectory(:, k), map_lines, ...
         %max_range, measurement_noise_range, 'LMS100');
-    b=size(scan);                 %LMS200->181 measures, last one is always 0, 180º
-    ang = 1:b(2);
-    if b(2) > 181
-        ang = (ang-270)*(1.5*pi/b(2));
-    else
-	    scan = scan(1:180);
-        ang = 1:180;
-        ang = (ang-90)*(pi/b(2));
+    num_points = length(scan);
+    % Determine scanner type and set parameters
+    if num_points > 181
+        % LMS100:
+        fov_rad = 1.5 * pi;      % 270° in radians
+    else % LMS200: 180° field of view, 181 points
+        fov_rad = pi;            % 180° in radians
     end
+    offset_rad = -fov_rad / 2;
+    angular_resolution = fov_rad / (num_points - 1);  % Radians per measurement
+    ang = (0:num_points-1) * angular_resolution + offset_rad;  % Bearing angles with offset
+    % Create (range, bearing) pairs
     scan = [scan(:), ang(:)];
     scan_history{k-1} = scan;
 
