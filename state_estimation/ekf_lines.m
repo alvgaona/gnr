@@ -12,18 +12,17 @@ set(groot, 'defaultAxesTickLabelInterpreter', 'latex');
 % Map is defined in Hesse form: (d,α).
 % d: perpendicular distance to the origin.
 % α: angle of that vector whose norm is the perpendicular distance.
-map_lines = [
-    deg2rad(90) 0; deg2rad(90)  10;  % Horizontal walls
-    deg2rad(0) 0; deg2rad(0)  10     % Vertical walls
-];
+hesse_map = HesseMap();
 
-% Two more internal walls
-map_lines = [
-    map_lines;
-    deg2rad(0) 4;
-    deg2rad(90) 6
-];
-num_walls = size(map_lines, 1);
+% Add horizontal and vertical lines
+hesse_map.addLine(deg2rad(90), 0);
+hesse_map.addLine(deg2rad(90), 10);
+hesse_map.addLine(deg2rad(0), 0);
+hesse_map.addLine(deg2rad(0), 10);
+
+num_walls = hesse_map.getNumLines();
+
+map_lines = hesse_map.getLines();
 
 %% Vehicle and Simulation Parameters
 dt = 0.1;                          % Discrete time step [s] - 10 Hz
@@ -96,23 +95,26 @@ for k = 1:num_steps-1
 end
 
 %% EKF Initialization
-estimated_state = dead_reckoning_trajectory(:, 1);  % Start from same initial state
-P = diag([0.1 0.1 deg2rad(1)].^2);                  % Initial state covariance
+x = dead_reckoning_trajectory(:, 1);  % Initial state
+P = diag([0.1 0.1 deg2rad(1)].^2);    % Initial state covariance
 
 % Process noise covariance for odometry [Δd, Δβ]
-process_noise_d = process_noise_velocity * sqrt(dt);      % Distance increment noise [m]
-process_noise_beta = process_noise_yaw_rate * sqrt(dt);   % Heading increment noise [rad]
+process_noise_d = process_noise_velocity;      % Distance increment noise [m]
+process_noise_beta = process_noise_yaw_rate;   % Heading increment noise [rad]
 Q = diag([process_noise_d^2, process_noise_beta^2]);
 
+% Create EKF instance
+chi2_threshold = 9.21;  % 99% confidence for 2 DOF
+ekf = EKFLines(x, P, map_lines, Q, chi2_threshold);
+
 estimated_trajectory = zeros(3, num_steps);
-estimated_trajectory(:, 1) = estimated_state;
+estimated_trajectory(:, 1) = x;
 
 % Storage for covariance history
 covariance_history = zeros(3, num_steps);
 covariance_history(:, 1) = sqrt(diag(P));
 
 %% Main EKF Loop
-
 for k = 2:num_steps
     % Simulate odometry sensors
     state_delta = true_trajectory(:, k) - true_trajectory(:, k-1);
@@ -120,110 +122,24 @@ for k = 2:num_steps
     actual_delta_theta = state_delta(3);
 
     % Add odometry measurement noise
-    noisy_delta_d = actual_delta_d + process_noise_velocity * sqrt(dt) * randn;
-    noisy_delta_theta = actual_delta_theta + process_noise_yaw_rate * sqrt(dt) * randn;
+    noisy_delta_d = actual_delta_d + process_noise_d * sqrt(dt) * randn;
+    noisy_delta_theta = actual_delta_theta + process_noise_beta * sqrt(dt) * randn;
+    
+    % EKF Prediction with noisy odometry [Δd, Δβ]
+    ekf.predict(noisy_delta_d, noisy_delta_theta);
 
-    %% EKF PREDICTION STEP
-    theta_k = estimated_state(3);
-
-    % Midpoint odometry model prediction
-    theta_mid = theta_k + noisy_delta_theta / 2;
-    predicted_state = [
-        estimated_state(1) + noisy_delta_d * cos(theta_mid);
-        estimated_state(2) + noisy_delta_d * sin(theta_mid);
-        theta_k + noisy_delta_theta
-    ];
-
-    % Compute Jacobian of discrete transition function with respect to state
-    % f(x,y,θ) = [x + Δd*cos(θ + Δβ/2); y + Δd*sin(θ + Δβ/2); θ + Δβ]
-    A = [
-        1, 0, -noisy_delta_d * sin(theta_mid);
-        0, 1,  noisy_delta_d * cos(theta_mid);
-        0, 0,  1
-    ];
-
-    % Compute Jacobian with respect to odometry input u = [Δd, Δβ]
-    % For midpoint model: ∂f/∂[Δd, Δβ]
-    W = [
-        cos(theta_mid),  -0.5 * noisy_delta_d * sin(theta_mid);
-        sin(theta_mid),   0.5 * noisy_delta_d * cos(theta_mid);
-        0,                1
-    ];
-
-    % Predict covariance
-    P = A * P * A' + W * Q * W';
-
-    %% EKF UPDATE STEP
+    % EKF Update
     scan = lms_scan(true_trajectory(:, k), map_lines, ...
         max_range, measurement_noise_range, 'LMS100');
     
     % Lines are observed in the Hessse form
     lines_observed = ransac_lines(scan, 0.02, 5);  
 
-    for j = 1:size(lines_observed, 1)
-        alpha_observed = lines_observed(j, 1);  % Angle of line normal (robot frame)
-        d_observed = lines_observed(j, 2);      % Distance to line (robot frame)
-        sigma_alpha = lines_observed(j, 3);     % Angular uncertainty
-        sigma_d = lines_observed(j, 4);         % Distance uncertainty
-        
-        %% Data association (matching)
-        % Try to match the real lines with the ones we observe
-        % from the robot itself.  Since the real lines are parameterized
-        % in the world frame, we should apply a frame transformation.
-        theta_predicted = predicted_state(3);
-        alpha_world = alpha_observed + theta_predicted;
-
-        % The matching happens by finding the closest matching line
-        % for each observed line.
-        angle_differences = zeros(num_walls, 1);
-        for w = 1:num_walls
-            angle_differences(w) = ...
-                abs(atan2(sin(map_lines(w, 1) - alpha_world), ...
-                cos(map_lines(w, 1) - alpha_world)));
-        end
-        [~, idx] = min(angle_differences);
-        alpha_map = map_lines(idx, 1);  % Map line angle (world frame)
-        d_map = map_lines(idx, 2);      % Map line distance from origin
-
-        % Predicted measurement: What we'd observe if at predicted_state
-        % Measurement model: h(x) = [alpha_map - theta; d_map - n'*[x;y]]
-        normal_map = [cos(alpha_map); sin(alpha_map)];
-        alpha_predicted = alpha_map - theta_predicted;  % Expected angle in robot frame
-        d_predicted = d_map - normal_map' * predicted_state(1:2);  % Expected distance
-
-        % Innovation (measurement residual)
-        innovation_angle = atan2(sin(alpha_observed - alpha_predicted), cos(alpha_observed - alpha_predicted));
-        innovation_distance = d_observed - d_predicted;
-        innovation = [innovation_angle; innovation_distance];
-
-        % Measurement Jacobian H (2x3 matrix)
-        % h(x,y,θ) = [alpha_map - θ; d_map - cos(alpha_map)*x - sin(alpha_map)*y]
-        H = [0,              0,              -1;
-             -cos(alpha_map), -sin(alpha_map), 0];
-
-        % Measurement noise covariance
-        R = diag([sigma_alpha^2, sigma_d^2]);
-
-        % Reject outliers using Mahalanobis distance
-        S = H * P * H' + R; % Innovation covariance
-        mahalanobis_dist = innovation' / S * innovation;
-        chi2_threshold = 9.21;  % 99% confidence for 2 DOF (chi-squared distribution)
-
-        if mahalanobis_dist > chi2_threshold
-            % Reject this measurement as an outlier
-            continue;
-        end
-
-        % Kalman update equations
-        K = P * H' / S;               % Kalman gain
-        predicted_state = predicted_state + K * innovation;
-        P = (eye(3) - K * H) * P;
-    end
-
-    %% Store Results
-    estimated_state = predicted_state;
-    estimated_trajectory(:, k) = estimated_state;
-    covariance_history(:, k) = sqrt(diag(P));  % Store standard deviations
+    ekf.update(lines_observed);
+    
+    % Store variables of interest
+    estimated_trajectory(:, k) = ekf.x;
+    covariance_history(:, k) = sqrt(diag(ekf.P)); % Store standard deviations
 end
 
 %% Compute Estimation Errors
