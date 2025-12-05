@@ -40,6 +40,22 @@ process_noise_yaw_rate = deg2rad(2); % Yaw rate noise [rad/s/sqrt(s)]
 measurement_noise_range = 0.01;      % Range measurement noise [m]
 max_range = 8;                       % Maximum sensor range [m]
 scan_history = {};
+scan = apoloGetLaserData(laserName);%lms_scan(true_trajectory(:, k), map_lines, ...
+    %max_range, measurement_noise_range, 'LMS100');
+num_points = length(scan);
+% Determine scanner type and set parameters
+if num_points > 181
+    % LMS100:
+    fov_rad = 1.5 * pi;      % 270° in radians
+else % LMS200: 180° field of view, 181 points
+    fov_rad = pi;            % 180° in radians
+end
+offset_rad = -fov_rad / 2;
+angular_resolution = fov_rad / (num_points - 1);  % Radians per measurement
+ang = (0:num_points-1) * angular_resolution + offset_rad;  % Bearing angles with offset
+% Create (range, bearing) pairs
+scan = [scan(:), ang(:)];
+scan_history{1} = scan;
 
 %% Ground-truth Trajectory
 true_trajectory = zeros(3, num_steps);      % [x; y; theta]
@@ -164,7 +180,7 @@ for k = 2:num_steps
     ang = (0:num_points-1) * angular_resolution + offset_rad;  % Bearing angles with offset
     % Create (range, bearing) pairs
     scan = [scan(:), ang(:)];
-    scan_history{k-1} = scan;
+    scan_history{k} = scan;
 
     % Lines are observed in the Hessse form
     lines_observed = ransac_lines(scan, 0.02, 5);  
