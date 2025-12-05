@@ -91,12 +91,12 @@ for k = 1:length(t)-1
     %% Get LiDAR scan
     scan = apoloGetLaserData(lidar_model);%lms_scan_new(x, obstacles, max_range, noise_std, lidar_model);
     b=size(scan);                 %LMS200->181 measures, last one is always 0, 180º
-    ang = 1:b(2);
+    ang = 0:b(2)-1;
     if b(2) > 181
         ang = (ang-270)*(1.5*pi/b(2));
     else
 	    scan = scan(1:180);
-        ang = 1:180;
+        ang = 0:179;
         ang = (ang-90)*(pi/b(2));
     end
     scan = [scan(:), ang(:)];
