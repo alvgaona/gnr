@@ -20,9 +20,8 @@ hesse_map.addLine(deg2rad(90), 10);
 hesse_map.addLine(deg2rad(0), 0);
 hesse_map.addLine(deg2rad(0), 10);
 
-num_walls = hesse_map.getNumLines();
-
-map_lines = hesse_map.getLines();
+num_walls = hesse_map.num_lines;
+map_lines = hesse_map.lines;
 
 %% Vehicle and Simulation Parameters
 dt = 0.1;                          % Discrete time step [s] - 10 Hz
@@ -32,10 +31,6 @@ num_steps = sim_time / dt;         % Total simulation steps
 %% Process Noise (continuous-time)
 process_noise_velocity = 0.05;       % Linear velocity noise [m/s/sqrt(s)]
 process_noise_yaw_rate = deg2rad(2); % Yaw rate noise [rad/s/sqrt(s)]
-
-%% Measurement Noise
-measurement_noise_range = 0.01;      % Range measurement noise [m]
-max_range = 8;                       % Maximum sensor range [m]
 
 %% Ground-truth Trajectory
 true_trajectory = zeros(3, num_steps);      % [x; y; theta]
@@ -114,6 +109,9 @@ estimated_trajectory(:, 1) = x;
 covariance_history = zeros(3, num_steps);
 covariance_history(:, 1) = sqrt(diag(P));
 
+%% Set up laser sensor
+scanner = LMSScanner('LMS100', 'MaxRange', 10, 'NoiseStd', 0.01);
+
 %% Main EKF Loop
 for k = 2:num_steps
     % Simulate odometry sensors
@@ -129,9 +127,8 @@ for k = 2:num_steps
     ekf.predict(noisy_delta_d, noisy_delta_theta);
 
     % EKF Update
-    scan = lms_scan(true_trajectory(:, k), map_lines, ...
-        max_range, measurement_noise_range, 'LMS100');
-    
+    scan = scanner.scan(true_trajectory(:, k), map_lines);
+
     % Lines are observed in the Hessse form
     lines_observed = ransac_lines(scan, 0.02, 5);  
 
@@ -146,31 +143,6 @@ end
 position_error_dr = sqrt(sum((dead_reckoning_trajectory(1:2, :) - true_trajectory(1:2, :)).^2, 1));
 position_error_ekf = sqrt(sum((estimated_trajectory(1:2, :) - true_trajectory(1:2, :)).^2, 1));
 time_vector = (0:num_steps-1) * dt;
-
-%% Display Statistics
-fprintf('\n========== Line-EKF with LMS200 Laser Scanner - Results ==========\n');
-fprintf('Vehicle Model:          Unicycle [v, ω]\n');
-fprintf('Measurement Model:      Line features from laser scan\n');
-fprintf('Map:                    %d walls in Hesse form\n', num_walls);
-fprintf('Time Step:              %.2f s (%.0f Hz)\n', dt, 1/dt);
-fprintf('Simulation Time:        %.2f s\n', sim_time);
-fprintf('Number of Steps:        %d\n', num_steps);
-fprintf('\nProcess Noise:\n');
-fprintf('  Velocity Std Dev:     %.3f m/s/sqrt(s)\n', process_noise_velocity);
-fprintf('  Yaw Rate Std Dev:     %.3f rad/s/sqrt(s) (%.2f deg/s/sqrt(s))\n', ...
-    process_noise_yaw_rate, rad2deg(process_noise_yaw_rate));
-fprintf('\nMeasurement Noise:\n');
-fprintf('  Range Std Dev:        %.3f m\n', measurement_noise_range);
-fprintf('  Max Range:            %.1f m\n', max_range);
-fprintf('\nDead Reckoning Performance:\n');
-fprintf('  Final Position Error:   %.3f m\n', position_error_dr(end));
-fprintf('  Mean Position Error:    %.3f m\n', mean(position_error_dr));
-fprintf('  Max Position Error:     %.3f m\n', max(position_error_dr));
-fprintf('\nLine-EKF Performance:\n');
-fprintf('  Final Position Error:   %.3f m\n', position_error_ekf(end));
-fprintf('  Mean Position Error:    %.3f m\n', mean(position_error_ekf));
-fprintf('  Max Position Error:     %.3f m\n', max(position_error_ekf));
-fprintf('===================================================================\n\n');
 
 %% Visualization (ignore logic)
 fig_animation = figure('Name', 'EKF Animation', 'Position', [50 50 1400 800]);
@@ -193,8 +165,10 @@ h_dead_traj = plot(dead_reckoning_trajectory(1, 1), dead_reckoning_trajectory(2,
 h_est_traj = plot(estimated_trajectory(1, 1), estimated_trajectory(2, 1), 'r--', 'LineWidth', 2);
 h_true_robot = plot(true_trajectory(1, 1), true_trajectory(2, 1), 'bo', 'MarkerSize', 12, 'MarkerFaceColor', 'b');
 h_est_robot = plot(estimated_trajectory(1, 1), estimated_trajectory(2, 1), 'ro', 'MarkerSize', 12, 'MarkerFaceColor', 'r');
-h_scan = plot(NaN, NaN, 'r.', 'MarkerSize', 4);
-h_rays = plot(NaN, NaN, 'Color', [1 0.5 0.5], 'LineWidth', 0.5);  % Light red rays
+h_scan_hits = plot(NaN, NaN, 'r.', 'MarkerSize', 4);
+h_scan_misses = plot(NaN, NaN, '.', 'Color', [0.5 0 0.5], 'MarkerSize', 4);  % Violet
+h_rays_hits = plot(NaN, NaN, 'Color', [1 0.5 0.5], 'LineWidth', 0.5);  % Light red rays
+h_rays_misses = plot(NaN, NaN, 'Color', [0.7 0.5 0.7], 'LineWidth', 0.5);  % Light violet rays
 h_observed_lines = [];  % Will hold multiple line handles
 
 xlabel('X [m]'); ylabel('Y [m]');
@@ -205,9 +179,9 @@ h_lidar_rays = plot(NaN, NaN, 'Color', [1 0.5 0.5], 'LineWidth', 0.5);
 h_lidar_points = plot(NaN, NaN, 'r.', 'MarkerSize', 4);
 h_observed = plot(NaN, NaN, 'g-', 'LineWidth', 2);
 
-legend([h_map, h_true_traj, h_dead_traj, h_est_traj, h_lidar_rays, h_lidar_points, h_observed], ...
+legend([h_map, h_true_traj, h_dead_traj, h_est_traj, h_rays_hits, h_rays_misses, h_scan_hits, h_scan_misses, h_observed], ...
        {'Map Walls', 'True Trajectory', 'Dead Reckoning', 'EKF Estimate', ...
-        'LiDAR Rays', 'LiDAR Points', 'Observed Lines'}, ...
+        'LiDAR Hits', 'LiDAR Misses', 'Hit Points', 'Miss Points', 'Observed Lines'}, ...
        'Location', 'best', 'AutoUpdate', 'off');
 xlim([-5 12]); ylim([-5 12]);
 
@@ -241,34 +215,63 @@ for k = 1:animation_step:num_steps
 
     set(h_true_robot, 'XData', true_trajectory(1, k), 'YData', true_trajectory(2, k));
     set(h_est_robot, 'XData', estimated_trajectory(1, k), 'YData', estimated_trajectory(2, k));
+    
+    scan = scanner.scan(true_trajectory(:, k), map_lines);
+    theta_k = true_trajectory(3, k);
+    robot_pos = true_trajectory(1:2, k);
 
-    scan = lms_scan(true_trajectory(:, k), map_lines, max_range, measurement_noise_range, 'LMS100');
     valid = ~isnan(scan(:, 1));
+    invalid = isnan(scan(:, 1));
 
+    % Process hits (valid returns)
     if any(valid)
-        theta_k = true_trajectory(3, k);
-        robot_pos = true_trajectory(1:2, k);
+        scan_xy_hits = scan(valid, 1) .* [cos(scan(valid, 2) + theta_k), sin(scan(valid, 2) + theta_k)];
+        scan_world_hits = [robot_pos(1) + scan_xy_hits(:, 1), robot_pos(2) + scan_xy_hits(:, 2)];
+        set(h_scan_hits, 'XData', scan_world_hits(:, 1), 'YData', scan_world_hits(:, 2));
 
-        scan_xy = scan(valid, 1) .* [cos(scan(valid, 2) + theta_k), sin(scan(valid, 2) + theta_k)];
-        scan_world = [robot_pos(1) + scan_xy(:, 1), robot_pos(2) + scan_xy(:, 2)];
-        set(h_scan, 'XData', scan_world(:, 1), 'YData', scan_world(:, 2));
-
-        n_rays = sum(valid);
-        ray_x = zeros(3 * n_rays, 1);
-        ray_y = zeros(3 * n_rays, 1);
-        for i = 1:n_rays
+        n_rays_hits = sum(valid);
+        ray_x_hits = zeros(3 * n_rays_hits, 1);
+        ray_y_hits = zeros(3 * n_rays_hits, 1);
+        idx_hit = find(valid);
+        for i = 1:n_rays_hits
             idx = 3 * (i - 1);
-            ray_x(idx + 1) = robot_pos(1);
-            ray_y(idx + 1) = robot_pos(2);
-            ray_x(idx + 2) = scan_world(i, 1);
-            ray_y(idx + 2) = scan_world(i, 2);
-            ray_x(idx + 3) = NaN;  % Space between rays
-            ray_y(idx + 3) = NaN;
+            ray_x_hits(idx + 1) = robot_pos(1);
+            ray_y_hits(idx + 1) = robot_pos(2);
+            ray_x_hits(idx + 2) = scan_world_hits(i, 1);
+            ray_y_hits(idx + 2) = scan_world_hits(i, 2);
+            ray_x_hits(idx + 3) = NaN;
+            ray_y_hits(idx + 3) = NaN;
         end
-        set(h_rays, 'XData', ray_x, 'YData', ray_y);
+        set(h_rays_hits, 'XData', ray_x_hits, 'YData', ray_y_hits);
     else
-        set(h_scan, 'XData', NaN, 'YData', NaN);
-        set(h_rays, 'XData', NaN, 'YData', NaN);
+        set(h_scan_hits, 'XData', NaN, 'YData', NaN);
+        set(h_rays_hits, 'XData', NaN, 'YData', NaN);
+    end
+
+    % Process misses (invalid returns - draw to max range)
+    if any(invalid)
+        miss_angles = scan(invalid, 2);
+        miss_ranges = ones(sum(invalid), 1) * scanner.max_range;
+        scan_xy_misses = miss_ranges .* [cos(miss_angles + theta_k), sin(miss_angles + theta_k)];
+        scan_world_misses = [robot_pos(1) + scan_xy_misses(:, 1), robot_pos(2) + scan_xy_misses(:, 2)];
+        set(h_scan_misses, 'XData', scan_world_misses(:, 1), 'YData', scan_world_misses(:, 2));
+
+        n_rays_misses = sum(invalid);
+        ray_x_misses = zeros(3 * n_rays_misses, 1);
+        ray_y_misses = zeros(3 * n_rays_misses, 1);
+        for i = 1:n_rays_misses
+            idx = 3 * (i - 1);
+            ray_x_misses(idx + 1) = robot_pos(1);
+            ray_y_misses(idx + 1) = robot_pos(2);
+            ray_x_misses(idx + 2) = scan_world_misses(i, 1);
+            ray_y_misses(idx + 2) = scan_world_misses(i, 2);
+            ray_x_misses(idx + 3) = NaN;
+            ray_y_misses(idx + 3) = NaN;
+        end
+        set(h_rays_misses, 'XData', ray_x_misses, 'YData', ray_y_misses);
+    else
+        set(h_scan_misses, 'XData', NaN, 'YData', NaN);
+        set(h_rays_misses, 'XData', NaN, 'YData', NaN);
     end
 
     lines_observed = ransac_lines(scan, 0.02, 5);
