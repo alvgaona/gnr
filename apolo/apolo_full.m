@@ -24,7 +24,7 @@ num_steps = simulation_time / time_step;
 robotName = convertStringsToChars(WorldXML.World.Pioneer3ATSim.nameAttribute);%LMS100Sim %LandMark mark_id="1"
 laserName = convertStringsToChars(WorldXML.World.LMS100Sim.nameAttribute);%'LMS100';
 %% Reset Odom
-apoloResetOdometry(robotName);
+apoloResetOdometry(robotName,start);
 
 %% Define Trajectory
 %Run the planner and store the trajectory points in 'traj'!!!
@@ -84,7 +84,7 @@ if apoloPlaceMRobot(robotName,[start(1),start(2),0],start(3))~=1
 end
 apoloLoc = apoloGetLocationMRobot(robotName);%[x y z theta]
 true_state = [apoloLoc(1);apoloLoc(2);apoloLoc(4)];%[x y theta]
-apoloResetOdometry(robotName);
+apoloResetOdometry(robotName,true_state');
 apoloUpdate();
 
 % Initial state prediction (with error for EKF)

@@ -83,7 +83,7 @@ if apoloPlaceMRobot(robotName,[0,-2.4,0],pi/2)~=1
 end
 apoloLoc = apoloGetLocationMRobot(robotName);%[x y z theta]
 true_state = [apoloLoc(1);apoloLoc(2);apoloLoc(4)];%[0; 0; pi/4];  % [x, y, theta]
-apoloResetOdometry(robotName);
+apoloResetOdometry(robotName,true_state');
 apoloUpdate();
 
 % Initial state prediction (with error for EKF)

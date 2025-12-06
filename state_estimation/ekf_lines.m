@@ -12,18 +12,16 @@ set(groot, 'defaultAxesTickLabelInterpreter', 'latex');
 % Map is defined in Hesse form: (d,α).
 % d: perpendicular distance to the origin.
 % α: angle of that vector whose norm is the perpendicular distance.
-map_lines = [
-    deg2rad(90) 0; deg2rad(90)  10;  % Horizontal walls
-    deg2rad(0) 0; deg2rad(0)  10     % Vertical walls
-];
+hesse_map = HesseMap();
 
-% Two more internal walls
-map_lines = [
-    map_lines;
-    deg2rad(0) 4;
-    deg2rad(90) 6
-];
-num_walls = size(map_lines, 1);
+% Add horizontal and vertical lines
+hesse_map.addLine(deg2rad(90), 0);
+hesse_map.addLine(deg2rad(90), 10);
+hesse_map.addLine(deg2rad(0), 0);
+hesse_map.addLine(deg2rad(0), 10);
+
+num_walls = hesse_map.num_lines;
+map_lines = hesse_map.lines;
 
 %% Vehicle and Simulation Parameters
 dt = 0.1;                          % Discrete time step [s] - 10 Hz
@@ -33,10 +31,6 @@ num_steps = sim_time / dt;         % Total simulation steps
 %% Process Noise (continuous-time)
 process_noise_velocity = 0.05;       % Linear velocity noise [m/s/sqrt(s)]
 process_noise_yaw_rate = deg2rad(2); % Yaw rate noise [rad/s/sqrt(s)]
-
-%% Measurement Noise
-measurement_noise_range = 0.01;      % Range measurement noise [m]
-max_range = 8;                       % Maximum sensor range [m]
 
 %% Ground-truth Trajectory
 true_trajectory = zeros(3, num_steps);      % [x; y; theta]
@@ -96,23 +90,29 @@ for k = 1:num_steps-1
 end
 
 %% EKF Initialization
-estimated_state = dead_reckoning_trajectory(:, 1);  % Start from same initial state
-P = diag([0.1 0.1 deg2rad(1)].^2);                  % Initial state covariance
+x = dead_reckoning_trajectory(:, 1);  % Initial state
+P = diag([0.1 0.1 deg2rad(1)].^2);    % Initial state covariance
 
 % Process noise covariance for odometry [Δd, Δβ]
-process_noise_d = process_noise_velocity * sqrt(dt);      % Distance increment noise [m]
-process_noise_beta = process_noise_yaw_rate * sqrt(dt);   % Heading increment noise [rad]
+process_noise_d = process_noise_velocity;      % Distance increment noise [m]
+process_noise_beta = process_noise_yaw_rate;   % Heading increment noise [rad]
 Q = diag([process_noise_d^2, process_noise_beta^2]);
 
+% Create EKF instance
+chi2_threshold = 9.21;  % 99% confidence for 2 DOF
+ekf = EKFLines(x, P, map_lines, Q, chi2_threshold);
+
 estimated_trajectory = zeros(3, num_steps);
-estimated_trajectory(:, 1) = estimated_state;
+estimated_trajectory(:, 1) = x;
 
 % Storage for covariance history
 covariance_history = zeros(3, num_steps);
 covariance_history(:, 1) = sqrt(diag(P));
 
-%% Main EKF Loop
+%% Set up laser sensor
+scanner = LMSScanner('LMS100', 'MaxRange', 10, 'NoiseStd', 0.01);
 
+%% Main EKF Loop
 for k = 2:num_steps
     % Simulate odometry sensors
     state_delta = true_trajectory(:, k) - true_trajectory(:, k-1);
@@ -120,141 +120,29 @@ for k = 2:num_steps
     actual_delta_theta = state_delta(3);
 
     % Add odometry measurement noise
-    noisy_delta_d = actual_delta_d + process_noise_velocity * sqrt(dt) * randn;
-    noisy_delta_theta = actual_delta_theta + process_noise_yaw_rate * sqrt(dt) * randn;
-
-    %% EKF PREDICTION STEP
-    theta_k = estimated_state(3);
-
-    % Midpoint odometry model prediction
-    theta_mid = theta_k + noisy_delta_theta / 2;
-    predicted_state = [
-        estimated_state(1) + noisy_delta_d * cos(theta_mid);
-        estimated_state(2) + noisy_delta_d * sin(theta_mid);
-        theta_k + noisy_delta_theta
-    ];
-
-    % Compute Jacobian of discrete transition function with respect to state
-    % f(x,y,θ) = [x + Δd*cos(θ + Δβ/2); y + Δd*sin(θ + Δβ/2); θ + Δβ]
-    A = [
-        1, 0, -noisy_delta_d * sin(theta_mid);
-        0, 1,  noisy_delta_d * cos(theta_mid);
-        0, 0,  1
-    ];
-
-    % Compute Jacobian with respect to odometry input u = [Δd, Δβ]
-    % For midpoint model: ∂f/∂[Δd, Δβ]
-    W = [
-        cos(theta_mid),  -0.5 * noisy_delta_d * sin(theta_mid);
-        sin(theta_mid),   0.5 * noisy_delta_d * cos(theta_mid);
-        0,                1
-    ];
-
-    % Predict covariance
-    P = A * P * A' + W * Q * W';
-
-    %% EKF UPDATE STEP
-    scan = lms_scan(true_trajectory(:, k), map_lines, ...
-        max_range, measurement_noise_range, 'LMS100');
+    noisy_delta_d = actual_delta_d + process_noise_d * sqrt(dt) * randn;
+    noisy_delta_theta = actual_delta_theta + process_noise_beta * sqrt(dt) * randn;
     
+    % EKF Prediction with noisy odometry [Δd, Δβ]
+    ekf.predict(noisy_delta_d, noisy_delta_theta);
+
+    % EKF Update
+    scan = scanner.scan(true_trajectory(:, k), map_lines);
+
     % Lines are observed in the Hessse form
     lines_observed = ransac_lines(scan, 0.02, 5);  
 
-    for j = 1:size(lines_observed, 1)
-        alpha_observed = lines_observed(j, 1);  % Angle of line normal (robot frame)
-        d_observed = lines_observed(j, 2);      % Distance to line (robot frame)
-        sigma_alpha = lines_observed(j, 3);     % Angular uncertainty
-        sigma_d = lines_observed(j, 4);         % Distance uncertainty
-        
-        %% Data association (matching)
-        % Try to match the real lines with the ones we observe
-        % from the robot itself.  Since the real lines are parameterized
-        % in the world frame, we should apply a frame transformation.
-        theta_predicted = predicted_state(3);
-        alpha_world = alpha_observed + theta_predicted;
-
-        % The matching happens by finding the closest matching line
-        % for each observed line.
-        angle_differences = zeros(num_walls, 1);
-        for w = 1:num_walls
-            angle_differences(w) = ...
-                abs(atan2(sin(map_lines(w, 1) - alpha_world), ...
-                cos(map_lines(w, 1) - alpha_world)));
-        end
-        [~, idx] = min(angle_differences);
-        alpha_map = map_lines(idx, 1);  % Map line angle (world frame)
-        d_map = map_lines(idx, 2);      % Map line distance from origin
-
-        % Predicted measurement: What we'd observe if at predicted_state
-        % Measurement model: h(x) = [alpha_map - theta; d_map - n'*[x;y]]
-        normal_map = [cos(alpha_map); sin(alpha_map)];
-        alpha_predicted = alpha_map - theta_predicted;  % Expected angle in robot frame
-        d_predicted = d_map - normal_map' * predicted_state(1:2);  % Expected distance
-
-        % Innovation (measurement residual)
-        innovation_angle = atan2(sin(alpha_observed - alpha_predicted), cos(alpha_observed - alpha_predicted));
-        innovation_distance = d_observed - d_predicted;
-        innovation = [innovation_angle; innovation_distance];
-
-        % Measurement Jacobian H (2x3 matrix)
-        % h(x,y,θ) = [alpha_map - θ; d_map - cos(alpha_map)*x - sin(alpha_map)*y]
-        H = [0,              0,              -1;
-             -cos(alpha_map), -sin(alpha_map), 0];
-
-        % Measurement noise covariance
-        R = diag([sigma_alpha^2, sigma_d^2]);
-
-        % Reject outliers using Mahalanobis distance
-        S = H * P * H' + R; % Innovation covariance
-        mahalanobis_dist = innovation' / S * innovation;
-        chi2_threshold = 9.21;  % 99% confidence for 2 DOF (chi-squared distribution)
-
-        if mahalanobis_dist > chi2_threshold
-            % Reject this measurement as an outlier
-            continue;
-        end
-
-        % Kalman update equations
-        K = P * H' / S;               % Kalman gain
-        predicted_state = predicted_state + K * innovation;
-        P = (eye(3) - K * H) * P;
-    end
-
-    %% Store Results
-    estimated_state = predicted_state;
-    estimated_trajectory(:, k) = estimated_state;
-    covariance_history(:, k) = sqrt(diag(P));  % Store standard deviations
+    ekf.update(lines_observed);
+    
+    % Store variables of interest
+    estimated_trajectory(:, k) = ekf.x;
+    covariance_history(:, k) = sqrt(diag(ekf.P)); % Store standard deviations
 end
 
 %% Compute Estimation Errors
 position_error_dr = sqrt(sum((dead_reckoning_trajectory(1:2, :) - true_trajectory(1:2, :)).^2, 1));
 position_error_ekf = sqrt(sum((estimated_trajectory(1:2, :) - true_trajectory(1:2, :)).^2, 1));
 time_vector = (0:num_steps-1) * dt;
-
-%% Display Statistics
-fprintf('\n========== Line-EKF with LMS200 Laser Scanner - Results ==========\n');
-fprintf('Vehicle Model:          Unicycle [v, ω]\n');
-fprintf('Measurement Model:      Line features from laser scan\n');
-fprintf('Map:                    %d walls in Hesse form\n', num_walls);
-fprintf('Time Step:              %.2f s (%.0f Hz)\n', dt, 1/dt);
-fprintf('Simulation Time:        %.2f s\n', sim_time);
-fprintf('Number of Steps:        %d\n', num_steps);
-fprintf('\nProcess Noise:\n');
-fprintf('  Velocity Std Dev:     %.3f m/s/sqrt(s)\n', process_noise_velocity);
-fprintf('  Yaw Rate Std Dev:     %.3f rad/s/sqrt(s) (%.2f deg/s/sqrt(s))\n', ...
-    process_noise_yaw_rate, rad2deg(process_noise_yaw_rate));
-fprintf('\nMeasurement Noise:\n');
-fprintf('  Range Std Dev:        %.3f m\n', measurement_noise_range);
-fprintf('  Max Range:            %.1f m\n', max_range);
-fprintf('\nDead Reckoning Performance:\n');
-fprintf('  Final Position Error:   %.3f m\n', position_error_dr(end));
-fprintf('  Mean Position Error:    %.3f m\n', mean(position_error_dr));
-fprintf('  Max Position Error:     %.3f m\n', max(position_error_dr));
-fprintf('\nLine-EKF Performance:\n');
-fprintf('  Final Position Error:   %.3f m\n', position_error_ekf(end));
-fprintf('  Mean Position Error:    %.3f m\n', mean(position_error_ekf));
-fprintf('  Max Position Error:     %.3f m\n', max(position_error_ekf));
-fprintf('===================================================================\n\n');
 
 %% Visualization (ignore logic)
 fig_animation = figure('Name', 'EKF Animation', 'Position', [50 50 1400 800]);
@@ -277,8 +165,10 @@ h_dead_traj = plot(dead_reckoning_trajectory(1, 1), dead_reckoning_trajectory(2,
 h_est_traj = plot(estimated_trajectory(1, 1), estimated_trajectory(2, 1), 'r--', 'LineWidth', 2);
 h_true_robot = plot(true_trajectory(1, 1), true_trajectory(2, 1), 'bo', 'MarkerSize', 12, 'MarkerFaceColor', 'b');
 h_est_robot = plot(estimated_trajectory(1, 1), estimated_trajectory(2, 1), 'ro', 'MarkerSize', 12, 'MarkerFaceColor', 'r');
-h_scan = plot(NaN, NaN, 'r.', 'MarkerSize', 4);
-h_rays = plot(NaN, NaN, 'Color', [1 0.5 0.5], 'LineWidth', 0.5);  % Light red rays
+h_scan_hits = plot(NaN, NaN, 'r.', 'MarkerSize', 4);
+h_scan_misses = plot(NaN, NaN, '.', 'Color', [0.5 0 0.5], 'MarkerSize', 4);  % Violet
+h_rays_hits = plot(NaN, NaN, 'Color', [1 0.5 0.5], 'LineWidth', 0.5);  % Light red rays
+h_rays_misses = plot(NaN, NaN, 'Color', [0.7 0.5 0.7], 'LineWidth', 0.5);  % Light violet rays
 h_observed_lines = [];  % Will hold multiple line handles
 
 xlabel('X [m]'); ylabel('Y [m]');
@@ -289,9 +179,9 @@ h_lidar_rays = plot(NaN, NaN, 'Color', [1 0.5 0.5], 'LineWidth', 0.5);
 h_lidar_points = plot(NaN, NaN, 'r.', 'MarkerSize', 4);
 h_observed = plot(NaN, NaN, 'g-', 'LineWidth', 2);
 
-legend([h_map, h_true_traj, h_dead_traj, h_est_traj, h_lidar_rays, h_lidar_points, h_observed], ...
+legend([h_map, h_true_traj, h_dead_traj, h_est_traj, h_rays_hits, h_rays_misses, h_scan_hits, h_scan_misses, h_observed], ...
        {'Map Walls', 'True Trajectory', 'Dead Reckoning', 'EKF Estimate', ...
-        'LiDAR Rays', 'LiDAR Points', 'Observed Lines'}, ...
+        'LiDAR Hits', 'LiDAR Misses', 'Hit Points', 'Miss Points', 'Observed Lines'}, ...
        'Location', 'best', 'AutoUpdate', 'off');
 xlim([-5 12]); ylim([-5 12]);
 
@@ -325,34 +215,63 @@ for k = 1:animation_step:num_steps
 
     set(h_true_robot, 'XData', true_trajectory(1, k), 'YData', true_trajectory(2, k));
     set(h_est_robot, 'XData', estimated_trajectory(1, k), 'YData', estimated_trajectory(2, k));
+    
+    scan = scanner.scan(true_trajectory(:, k), map_lines);
+    theta_k = true_trajectory(3, k);
+    robot_pos = true_trajectory(1:2, k);
 
-    scan = lms_scan(true_trajectory(:, k), map_lines, max_range, measurement_noise_range, 'LMS100');
     valid = ~isnan(scan(:, 1));
+    invalid = isnan(scan(:, 1));
 
+    % Process hits (valid returns)
     if any(valid)
-        theta_k = true_trajectory(3, k);
-        robot_pos = true_trajectory(1:2, k);
+        scan_xy_hits = scan(valid, 1) .* [cos(scan(valid, 2) + theta_k), sin(scan(valid, 2) + theta_k)];
+        scan_world_hits = [robot_pos(1) + scan_xy_hits(:, 1), robot_pos(2) + scan_xy_hits(:, 2)];
+        set(h_scan_hits, 'XData', scan_world_hits(:, 1), 'YData', scan_world_hits(:, 2));
 
-        scan_xy = scan(valid, 1) .* [cos(scan(valid, 2) + theta_k), sin(scan(valid, 2) + theta_k)];
-        scan_world = [robot_pos(1) + scan_xy(:, 1), robot_pos(2) + scan_xy(:, 2)];
-        set(h_scan, 'XData', scan_world(:, 1), 'YData', scan_world(:, 2));
-
-        n_rays = sum(valid);
-        ray_x = zeros(3 * n_rays, 1);
-        ray_y = zeros(3 * n_rays, 1);
-        for i = 1:n_rays
+        n_rays_hits = sum(valid);
+        ray_x_hits = zeros(3 * n_rays_hits, 1);
+        ray_y_hits = zeros(3 * n_rays_hits, 1);
+        idx_hit = find(valid);
+        for i = 1:n_rays_hits
             idx = 3 * (i - 1);
-            ray_x(idx + 1) = robot_pos(1);
-            ray_y(idx + 1) = robot_pos(2);
-            ray_x(idx + 2) = scan_world(i, 1);
-            ray_y(idx + 2) = scan_world(i, 2);
-            ray_x(idx + 3) = NaN;  % Space between rays
-            ray_y(idx + 3) = NaN;
+            ray_x_hits(idx + 1) = robot_pos(1);
+            ray_y_hits(idx + 1) = robot_pos(2);
+            ray_x_hits(idx + 2) = scan_world_hits(i, 1);
+            ray_y_hits(idx + 2) = scan_world_hits(i, 2);
+            ray_x_hits(idx + 3) = NaN;
+            ray_y_hits(idx + 3) = NaN;
         end
-        set(h_rays, 'XData', ray_x, 'YData', ray_y);
+        set(h_rays_hits, 'XData', ray_x_hits, 'YData', ray_y_hits);
     else
-        set(h_scan, 'XData', NaN, 'YData', NaN);
-        set(h_rays, 'XData', NaN, 'YData', NaN);
+        set(h_scan_hits, 'XData', NaN, 'YData', NaN);
+        set(h_rays_hits, 'XData', NaN, 'YData', NaN);
+    end
+
+    % Process misses (invalid returns - draw to max range)
+    if any(invalid)
+        miss_angles = scan(invalid, 2);
+        miss_ranges = ones(sum(invalid), 1) * scanner.max_range;
+        scan_xy_misses = miss_ranges .* [cos(miss_angles + theta_k), sin(miss_angles + theta_k)];
+        scan_world_misses = [robot_pos(1) + scan_xy_misses(:, 1), robot_pos(2) + scan_xy_misses(:, 2)];
+        set(h_scan_misses, 'XData', scan_world_misses(:, 1), 'YData', scan_world_misses(:, 2));
+
+        n_rays_misses = sum(invalid);
+        ray_x_misses = zeros(3 * n_rays_misses, 1);
+        ray_y_misses = zeros(3 * n_rays_misses, 1);
+        for i = 1:n_rays_misses
+            idx = 3 * (i - 1);
+            ray_x_misses(idx + 1) = robot_pos(1);
+            ray_y_misses(idx + 1) = robot_pos(2);
+            ray_x_misses(idx + 2) = scan_world_misses(i, 1);
+            ray_y_misses(idx + 2) = scan_world_misses(i, 2);
+            ray_x_misses(idx + 3) = NaN;
+            ray_y_misses(idx + 3) = NaN;
+        end
+        set(h_rays_misses, 'XData', ray_x_misses, 'YData', ray_y_misses);
+    else
+        set(h_scan_misses, 'XData', NaN, 'YData', NaN);
+        set(h_rays_misses, 'XData', NaN, 'YData', NaN);
     end
 
     lines_observed = ransac_lines(scan, 0.02, 5);
