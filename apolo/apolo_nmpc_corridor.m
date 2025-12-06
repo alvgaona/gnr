@@ -19,7 +19,7 @@ if isfield(WorldXML.World,'PrismaticPart')
 else
     obstacle_center = [8; 2]; % Center position [x; y] (offset slightly from center)
 end
-obstacle_size = 0.5;        % Square side length [m] (reduced from 1.2)
+obstacle_size = 1;        % Square side length [m] (reduced from 1.2)
 obstacles{end+1} = struct('type', 'square', 'center', obstacle_center, 'size', obstacle_size);
 
 %% LiDAR Configuration
@@ -29,26 +29,26 @@ lidar_model = 'LMS100'; % 180-degree FOV, 181 beams
 robotName = convertStringsToChars(WorldXML.World.Pioneer3ATSim.nameAttribute);%LMS100Sim %LandMark mark_id="1"
 %laserName = convertStringsToChars(WorldXML.World.LMS100Sim.nameAttribute);%'LMS100';
 
-%% CBF Parameters
-d_safe = 0.4;           % Safety radius [m]
-alpha_cbf = 0.3;        % CBF aggressiveness parameter
-scan_downsample = 50;   % Use every Nth LiDAR beam
-constraint_range = 2.0; % Only use obstacles within this distance [m]
-
 %% NMPC Configuration
-nx = 3;  % states: [x, y, theta]
-nu = 2;  % inputs: [v, omega]
+controller = NMPCCBFController(...
+    'HorizonLength', 10, ...
+    'TimeStep', 0.1, ...
+    'StateWeights', [1, 1, 0.1], ...
+    'ControlWeights', [1, 1], ...
+    'VelocityLimits', [0, 1.5], ...
+    'AngularLimits', [-2, 2], ...
+    'SafetyRadius', 0.4, ...
+    'AlphaCBF', 0.3, ...
+    'ScanDownsample', 50, ...
+    'ConstraintRange', 2.0, ...
+    'MaxIterations', 100);
 
-dt = 0.1;               % Sample time [s]
-N = 10;                 % Prediction horizon
-Q = diag([1, 1, 0.1]); % State tracking weights [x, y, theta]
-R = diag([1, 1]);  % Control effort weights [v, omega]
-
-% Control constraints
-v_min = 0;
-v_max = 1.5;
-omega_min = -2;
-omega_max = 2;
+% Extract parameters for simulation and plotting
+dt = controller.dt;
+d_safe = controller.d_safe;
+v_max = controller.v_max;
+omega_min = controller.omega_min;
+omega_max = controller.omega_max;
 
 %% Reference Trajectory
 Tsim = 30;
@@ -102,38 +102,11 @@ for k = 1:length(t)-1
     scan = [scan(:), ang(:)];
     scan_history{k} = scan;
 
-    %% Compute optimal control with CBF constraints
-    % Reference over prediction horizon
-    ref_idx = k:min(k+N, length(xref));
-    xref_horizon = xref(ref_idx, :);
-
-    % Pad if needed. Generally, needed at the end of the simulation
-    if size(xref_horizon, 1) < N+1
-        xref_horizon = [xref_horizon; repmat(xref_horizon(end,:), N+1-size(xref_horizon,1), 1)];
-    end
-
-    % Optimization setup
-    options = optimoptions('fmincon', ...
-        'Algorithm', 'sqp', ...
-        'Display', 'off', ...
-        'MaxIterations', 100);
-
-    % Initial guess (warm start with last control)
-    u0 = repmat(lastMV', N, 1);
-    u0 = u0(:);
-
-    % Bounds on control inputs
-    lb = repmat([v_min; omega_min], N, 1);
-    ub = repmat([v_max; omega_max], N, 1);
-
-    % Solve NMPC optimization
-    u_opt = fmincon(@(u) cost_function(u, x, xref_horizon, N, dt, Q, R), ...
-                    u0, [], [], [], [], lb, ub, ...
-                    @(u) cbf_constraints(u, x, scan, N, dt, d_safe, alpha_cbf, scan_downsample, constraint_range), ...
-                    options);
-
-    % Extract first control input
-    u = u_opt(1:2);
+    % Compute control using:
+    % x: current state
+    % xref: from current iteration onwards
+    % scan: measurements scanned in current iteration
+    u = controller.compute(x, xref(k, :), scan);
 
     %% Apply control to vehicle (unicycle dynamics)
     %x = x + dt * [u(1)*cos(x(3)); u(1)*sin(x(3)); u(2)];
