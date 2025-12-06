@@ -17,30 +17,29 @@ obstacle_size = 1.0;        % Square side length [m] (reduced from 1.2)
 obstacles{end+1} = struct('type', 'square', 'center', obstacle_center, 'size', obstacle_size);
 
 %% LiDAR Configuration
-max_range = 10.0;       % Maximum sensor range [m]
-noise_std = 0.02;       % Range measurement noise [m]
-lidar_model = 'LMS200'; % 180-degree FOV, 181 beams
-
-%% CBF Parameters
-d_safe = 0.6;           % Safety radius [m]
-alpha_cbf = 1.0;        % CBF aggressiveness parameter (lower will react earlier)
-scan_downsample = 50;   % Downsample scans to reduce CBF constraints
-constraint_range = 2.0; % Only use obstacles within this distance [m]
+scanner = LMSScanner('LMS100', 'MaxRange', 10.0, 'NoiseStd', 0.02);
+scanner.info();
 
 %% NMPC Configuration
-nx = 3;  % states: [x, y, theta]
-nu = 2;  % inputs: [v, omega]
+controller = NMPCCBFController(...
+    'HorizonLength', 20, ...
+    'TimeStep', 0.1, ...
+    'StateWeights', [1, 1, 0.1], ...
+    'ControlWeights', [1, 1], ...
+    'VelocityLimits', [0, 1], ...
+    'AngularLimits', [-2, 2], ...
+    'SafetyRadius', 0.6, ...
+    'AlphaCBF', 0.5, ...
+    'ScanDownsample', 100, ...
+    'ConstraintRange', 3.0, ...
+    'MaxIterations', 100);
 
-dt = 0.1;               % Sample time [s]
-N = 20;                 % Prediction horizon
-Q = diag([1, 1, 0.1]); % State tracking weights [x, y, theta]
-R = diag([1, 1]);  % Control effort weights [v, omega]
-
-% Control constraints
-v_min = 0;
-v_max = 1.5;
-omega_min = -2;
-omega_max = 2;
+% Extract parameters for simulation and plotting
+dt = controller.dt;
+d_safe = controller.d_safe;
+v_max = controller.v_max;
+omega_min = controller.omega_min;
+omega_max = controller.omega_max;
 
 %% Reference Trajectory
 Tsim = 100;
@@ -61,7 +60,6 @@ x0 = [0; 0; 0];  % Start at left of corridor, centered, pointing right
 X = x0';
 U = [];
 x = x0;
-lastMV = [0; 0];
 
 % Store LiDAR data for visualization
 scan_history = {};
@@ -73,53 +71,24 @@ fprintf('Safety radius: %.2fm\n', d_safe);
 
 for k = 1:length(t)-1
     %% Get LiDAR scan
-    scan = lms_scan_new(x, obstacles, max_range, noise_std, lidar_model);
+    scan = scanner.scan(x, obstacles);
     scan_history{k} = scan;
 
-    %% Compute optimal control with CBF constraints
-    % Reference over prediction horizon
-    ref_idx = k:min(k+N, length(xref));
-    xref_horizon = xref(ref_idx, :);
+    % Compute control using:
+    % x: current state
+    % xref: from current iteration onwards
+    % scan: measurements scanned in current iteration
+    u = controller.compute(x, xref(k, :), scan);
 
-    % Pad if needed. Generally, needed at the end of the simulation
-    if size(xref_horizon, 1) < N+1
-        xref_horizon = [xref_horizon; repmat(xref_horizon(end,:), N+1-size(xref_horizon,1), 1)];
-    end
-
-    % Optimization setup
-    options = optimoptions('fmincon', ...
-        'Algorithm', 'sqp', ...
-        'Display', 'off', ...
-        'MaxIterations', 100);
-
-    % Initial guess (warm start with last control)
-    u0 = repmat(lastMV', N, 1);
-    u0 = u0(:);
-
-    % Bounds on control inputs
-    lb = repmat([v_min; omega_min], N, 1);
-    ub = repmat([v_max; omega_max], N, 1);
-
-    % Solve NMPC optimization
-    u_opt = fmincon(@(u) cost_function(u, x, xref_horizon, N, dt, Q, R), ...
-                    u0, [], [], [], [], lb, ub, ...
-                    @(u) cbf_constraints(u, x, scan, N, dt, d_safe, alpha_cbf, scan_downsample, constraint_range), ...
-                    options);
-
-    % Extract first control input
-    u = u_opt(1:2);
-
-    %% Apply control to vehicle (unicycle dynamics)
+    % Apply control to vehicle (unicycle dynamics)
     x = x + dt * [u(1)*cos(x(3)); u(1)*sin(x(3)); u(2)];
 
-    %% Store data
+    % Store data
     X = [X; x'];
     U = [U; u'];
-    lastMV = u;
 
     if mod(k, 20) == 0
-        fprintf('Time: %.1fs, Pos: [%.2f, %.2f], Active constraints: checking...\n', ...
-                t(k), x(1), x(2));
+        fprintf('Time: %.1fs, Pos: [%.2f, %.2f]\n', t(k), x(1), x(2));
     end
 end
 
@@ -357,73 +326,3 @@ for k = 1:playback_speed:length(X(:,1))
 end
 
 fprintf('Animation complete!\n');
-
-%% Helper Functions
-function J = cost_function(u_seq, x0, xref, N, dt, Q, R)
-    % Compute cost for NMPC optimization
-    u_seq = reshape(u_seq, 2, N)';
-
-    x = x0;
-    J = 0;
-
-    for k = 1:N
-        u = u_seq(k, :)';
-
-        % State error
-        x_err = x - xref(k, :)';
-        J = J + x_err' * Q * x_err;
-
-        % Control effort
-        J = J + u' * R * u;
-
-        % Propagate dynamics
-        x = x + dt * [u(1)*cos(x(3)); u(1)*sin(x(3)); u(2)];
-    end
-
-    % Terminal cost
-    x_err = x - xref(N+1, :)';
-    J = J + x_err' * Q * x_err;
-end
-
-function [c, ceq] = cbf_constraints(u_seq, x0, scan, N, dt, d_safe, alpha, downsample, max_dist)
-    % Control Barrier Function constraints
-    u_seq = reshape(u_seq, 2, N)';
-
-    % Filter scan: valid readings within threshold distance
-    valid = ~isnan(scan(:,1)) & scan(:,1) < max_dist;
-
-    % Downsample to reduce number of constraints
-    valid_idx = find(valid);
-    valid_idx = valid_idx(1:downsample:end);
-
-    ranges = scan(valid_idx, 1);
-    bearings = scan(valid_idx, 2);
-
-    c = [];
-
-    % Apply CBF constraint at each prediction step
-    x = x0;
-    for k = 1:N
-        u = u_seq(k, :)';
-        v = u(1);
-        omega = u(2);
-
-        % Barrier function: h = range - d_safe
-        h = ranges - d_safe;
-
-        % Time derivative: h_dot (range rate due to robot motion)
-        % For static obstacles: range_dot = -v*cos(bearing) - range*omega*sin(bearing)
-        h_dot = -v * cos(bearings) - ranges .* omega .* sin(bearings);
-
-        % CBF constraint: h_dot + alpha*h >= 0
-        % Convert to c <= 0 format
-        c_k = -(h_dot + alpha * h);
-
-        c = [c; c_k];
-
-        % Propagate dynamics for next step
-        x = x + dt * [u(1)*cos(x(3)); u(1)*sin(x(3)); u(2)];
-    end
-
-    ceq = [];  % No equality constraints
-end

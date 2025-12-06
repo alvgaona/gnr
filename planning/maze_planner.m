@@ -140,9 +140,11 @@ else
     end
     refpath = plan(planner,start,waypoints(1,1:3),"SearchMode","greedy");
     traj = refpath.States;
+    disp('Traj. from start to waypoint 1 done...');
     for i=1:size(waypoints,1)-1
         refpath = plan(planner,waypoints(i,1:3),waypoints(i+1,1:3),"SearchMode","greedy");
         traj = [traj; refpath.States];
+        disp('Traj. from waypoint to waypoint done...');
     end
     refpath = plan(planner,waypoints(size(waypoints,1),1:3),goal,"SearchMode","greedy");
     traj = [traj; refpath.States];
