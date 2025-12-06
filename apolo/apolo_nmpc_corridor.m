@@ -1,8 +1,8 @@
 clc; clear; close all;
 
 %% Environment. Vertical corridor with parallel walls
-corridor_width = 20;  % Corridor width [m]
-corridor_length = 2; % Corridor length [m]
+corridor_width = 50;  % Corridor width [m]
+corridor_length = 4; % Corridor length [m]
 
 % Define obstacles as cell array
 obstacles = {};
@@ -51,7 +51,7 @@ omega_min = controller.omega_min;
 omega_max = controller.omega_max;
 
 %% Reference Trajectory
-Tsim = 30;
+Tsim = 40;
 t = 0:dt:Tsim;
 
 % Straight vertical trajectory through center of corridor
