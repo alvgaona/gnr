@@ -1,7 +1,3 @@
-%% Extended Kalman Filter with Differential Drive Model
-% Control input: [Δd, Δβ] where Δd is distance traveled and Δβ is heading change
-% Measurement model: Bearing to beacons
-
 clear;
 close all;
 clc;
@@ -13,7 +9,6 @@ simulation_time = 20;       % Total simulation time [s]
 num_steps = simulation_time / time_step;
 
 %% Define Trajectory
-% You can change these to create different trajectories
 trajectory_type = 'curve';  % Options: 'linear', 'circular', 'curve'
 
 switch trajectory_type
@@ -33,8 +28,7 @@ switch trajectory_type
 end
 
 
-%% Process Noise (Motion Model Uncertainty)
-
+%% Process Noise
 % For EKF (in odometry space: Δd, Δβ)
 process_noise_d = 0.01;      % Distance increment noise [m]
 process_noise_beta = 0.02;   % Heading increment noise [rad]
@@ -44,8 +38,7 @@ Q = [process_noise_d^2, 0;
 % Pre-compute standard deviations for efficiency
 Q_std = sqrt(diag(Q));
 
-%% Measurement Noise (Sensor Uncertainty)
-
+%% Measurement Noise
 measurement_noise_std = 0.05;  % Bearing measurement noise [rad]
 R = measurement_noise_std^2 * eye(3);  % 3 beacons
 
@@ -66,10 +59,13 @@ num_beacons = size(beacons, 1);
 true_state = [0; 0; pi/4];  % [x, y, theta]
 
 % Initial state prediction (with error for EKF)
-estimated_state = true_state + [0.5; 0.5; 0.1];  % Just deviate a little
+initial_state = true_state + [0.5; 0.5; 0.1];  % Just deviate a little
 
 % Initial state covariance: with uncertainty for the state vector
-P = diag([0.5^2, 0.5^2, 0.1^2]);
+initial_P = diag([0.5^2, 0.5^2, 0.1^2]);
+
+% Create EKF instance
+ekf = EKFLandmarks(initial_state, initial_P, beacons, Q);
 
 %% Variables to show results
 true_trajectory = zeros(3, num_steps);
@@ -80,18 +76,12 @@ control_history = zeros(2, num_steps);
 %% Main Simulation Loop
 
 for step = 1:num_steps
-    % 1. Simulate ground truth robot motion: Differential drive model with
-    % linear and angular velocity as control input, [v, ω]
-
     % Store previous state to compute actual displacement
     prev_state = true_state;
 
     % Differential drive control inputs: linear velocity (v) and angular velocity (ω)
     v = velocity_profile(step);
     omega = angular_velocity_profile(step);
-
-    % Differential drive dynamics (no noise - perfect execution)
-    % Note: v and ω could come from wheel velocities: v = (v_R + v_L)/2, ω = (v_R - v_L)/b
 
     % Use Euler method for integration (simpler, first-order)
     theta_k = true_state(3);
@@ -131,73 +121,17 @@ for step = 1:num_steps
     % Control input: u = [Δd, Δβ]
     delta_d_hat = noisy_control(1);
     delta_beta_hat = noisy_control(2);
-    theta_k = estimated_state(3);
 
-    % Predicted state using midpoint odometry model
-    theta_mid = theta_k + delta_beta_hat / 2;
-    predicted_state = [
-        estimated_state(1) + delta_d_hat * cos(theta_mid);
-        estimated_state(2) + delta_d_hat * sin(theta_mid);
-        theta_k + delta_beta_hat
-    ];
+    % Use EKFLandmarks predict method
+    ekf.predict(delta_d_hat, delta_beta_hat);
 
-    % Compute Jacobian of discrete transition function with respect to state
-    % f(x,y,θ) = [x + Δd*cos(θ + Δβ/2); y + Δd*sin(θ + Δβ/2); θ + Δβ]
-    A = [
-        1, 0, -delta_d_hat * sin(theta_mid);
-        0, 1,  delta_d_hat * cos(theta_mid);
-        0, 0,  1
-    ];
-
-    % Compute Jacobian with respect to control input u = [Δd, Δβ]
-    % For midpoint model: ∂f/∂[Δd, Δβ]
-    W = [
-        cos(theta_mid),  -0.5 * delta_d_hat * sin(theta_mid);
-        sin(theta_mid),   0.5 * delta_d_hat * cos(theta_mid);
-        0,                1
-    ];
-
-    % Predict covariance
-    P_predicted = A * P * A' + W * Q * W';
-
-    %% EKF UPDATE STEP - Vectorized
-    % Compute all predicted measurements at once
-    dx_pred = beacons(:,1) - predicted_state(1);
-    dy_pred = beacons(:,2) - predicted_state(2);
-    dist_sq = dx_pred.^2 + dy_pred.^2;
-
-    % Predicted bearings
-    predicted_bearings = atan2(dy_pred, dx_pred);
-    predicted_measurements = predicted_bearings - predicted_state(3);
-
-    % Normalize to [-pi, pi]
-    predicted_measurements = atan2(sin(predicted_measurements), cos(predicted_measurements));
-
-    % Measurement Jacobian (all rows at once)
-    H = [dy_pred ./ dist_sq, -dx_pred ./ dist_sq, -ones(num_beacons, 1)];
-
-    % Innovation (measurement residual) with angle normalization
-    innovation = measurements - predicted_measurements;
-    innovation = atan2(sin(innovation), cos(innovation));
-
-    % Innovation covariance
-    S = H * P_predicted * H' + R;
-
-    % Kalman gain
-    K = P_predicted * H' / S;
-
-    % Update state estimate
-    estimated_state = predicted_state + K * innovation;
-
-    % Normalize theta to [-pi, pi]
-    estimated_state(3) = atan2(sin(estimated_state(3)), cos(estimated_state(3)));
-
-    % Update covariance
-    P = (eye(3) - K * H) * P_predicted;
+    %% EKF UPDATE STEP
+    % Use EKFLandmarks update method (bearing-only)
+    ekf.update(measurements, R);
 
     %% Store Results
-    estimated_trajectory(:, step) = estimated_state;
-    variance_history(:, step) = [P(1,1); P(2,2); P(3,3)];
+    estimated_trajectory(:, step) = ekf.x;
+    variance_history(:, step) = diag(ekf.P);
 end
 
 %% Compute Estimation Errors
