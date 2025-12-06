@@ -80,10 +80,10 @@ for k = 1:length(t)-1
     % scan: measurements scanned in current iteration
     u = controller.compute(x, xref(k, :), scan);
 
-    %% Apply control to vehicle (unicycle dynamics)
+    % Apply control to vehicle (unicycle dynamics)
     x = x + dt * [u(1)*cos(x(3)); u(1)*sin(x(3)); u(2)];
 
-    %% Store data
+    % Store data
     X = [X; x'];
     U = [U; u'];
 
