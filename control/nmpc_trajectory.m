@@ -1,32 +1,18 @@
 clc; clear; close all;
 
-nx = 3;  % states: [x, y, theta]
-ny = 3;  % outputs: [x, y, theta]
-nu = 2;  % inputs: [v, omega]
-nlobj = nlmpc(nx, ny, nu);
+controller = NMPCController( ...
+    PredictionHorizon=10, ...
+    ControlHorizon=5, ...
+    TimeStep=0.1, ...
+    StateWeights=[10, 10, 1], ...
+    ControlWeights=[0.1, 1], ...
+    VelocityLimits=[0, 2], ...
+    AngularLimits=[-2, 2] ...
+);
 
-nlobj.Ts = 0.1;               % Sample time [s]
-nlobj.PredictionHorizon = 10; % Prediction steps
-nlobj.ControlHorizon = 5;     % Control steps
-
-% Uncycle dynamics
-nlobj.Model.StateFcn = @(x,u) [u(1)*cos(x(3));
-                                u(1)*sin(x(3));
-                                u(2)];
-
-% MPC restrictions
-nlobj.MV(1).Min = 0;    % v >= 0
-nlobj.MV(1).Max = 2;    % v <= 2 m/s
-nlobj.MV(2).Min = -2;   % omega >= -2 rad/s
-nlobj.MV(2).Max = 2;    % omega <= 2 rad/s
-
-% Weights
-nlobj.Weights.OutputVariables = [10 10 1];    % [x, y, theta]
-nlobj.Weights.ManipulatedVariables = [0.1 1]; % [v, omega]
-
-x0 = [-1; 1.5; 0];   % Start a little bit away from the trajectory
-Tsim = 15;           % The total time of the simulation
-t = 0:nlobj.Ts:Tsim; % Array of timesteps
+x0 = [-1; 1.5; 0];      % Start a little bit away from the trajectory
+Tsim = 15;              % The total time of the simulation
+t = 0:controller.dt:Tsim; % Array of timesteps
 
 % Reference trajectory
 v_ref = 1.0;                   % Reference speed [m/s]
@@ -45,17 +31,14 @@ X = x0';
 U = [];
 x = x0;
 
-lastMV = [0; 0];  % Initialize last control input
-
 for k = 1:length(t)-1
-    u = nlmpcmove(nlobj, x, lastMV, xref(k:min(k+nlobj.PredictionHorizon,end),:));
+    u = controller.compute(x, xref(k:end,:));
 
     % Apply control to the vehicle
-    x = x + nlobj.Ts * [u(1)*cos(x(3)); u(1)*sin(x(3)); u(2)];
+    x = x + controller.dt * [u(1)*cos(x(3)); u(1)*sin(x(3)); u(2)];
 
     X = [X; x'];
     U = [U; u'];
-    lastMV = u;
 end
 
 % Tracking errors
