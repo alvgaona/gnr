@@ -65,8 +65,8 @@ classdef NMPCController < handle
             obj.nlobj.MV(2).Max = options.AngularLimits(2);  % omega <= omega_max [rad/s]
 
             % Weights
-            obj.nlobj.Weights.OutputVariables = diag(options.StateWeights);
-            obj.nlobj.Weights.ManipulatedVariables = diag(options.ControlWeights);
+            obj.nlobj.Weights.OutputVariables = options.StateWeights;
+            obj.nlobj.Weights.ManipulatedVariables = options.ControlWeights;
 
             obj.last_u = [0; 0];
         end
