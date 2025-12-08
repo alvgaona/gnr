@@ -41,7 +41,7 @@ pause_time = 0;          % For "realism" use time_step [s]
 simulation_time = 40;       % Total simulation time [s]
 num_steps = simulation_time / time_step;
 robotName = convertStringsToChars(WorldXML.World.Pioneer3ATSim.nameAttribute);%LMS100Sim %LandMark mark_id="1"
-laserName = 'LMS200';%convertStringsToChars(WorldXML.World.LMS100Sim.nameAttribute);%'LMS100';
+laserName = 'LMS100';%convertStringsToChars(WorldXML.World.LMS100Sim.nameAttribute);%'LMS100';
 %% Reset Odom
 apoloResetOdometry(robotName,start);
 
@@ -59,6 +59,25 @@ theta_ref = zeros(size(t));%pi/2 * ones(size(t));    % Point upward (90 degrees)
 
 xref = [x_ref', y_ref', theta_ref'];
 
+%% Beacon Positions
+num_beacons = size(WorldXML.World.LandMark,2);
+if num_beacons == 0
+    beacons = [
+        4  8 1;   % Beacon 1
+        1  1 2;   % Beacon 2
+       11  3 3   % Beacon 3
+    ];
+    num_beacons=size(beacons, 1);
+else %Get beacon positions from file
+    beacons = zeros(num_beacons,3);
+    for i=1:num_beacons
+        coords = split(extractBetween(WorldXML.World.LandMark(i).position,"{","}"),",");
+        beacons(i,:) = [coords(1) coords(2) WorldXML.World.LandMark(i).mark_idAttribute];
+    end
+end
+beacons = sortrows(beacons,3); %make index in array coincide with landmark index
+num_measurements = 2 * num_beacons;  % Range + bearing per beacon
+
 %% Initial Conditions
 
 % Initial state
@@ -74,11 +93,20 @@ apoloUpdate();
 % For EKF (in odometry space: Δd, Δβ)
 process_noise_d = 9.5003e-05;      % Distance increment noise [m]
 process_noise_beta = 3.9080e-05;   % Heading increment noise [rad]
-Q = [process_noise_d^2, 0;
-     0, process_noise_beta^2];
+Q = diag([process_noise_d^2, process_noise_beta^2]);
 
 % Pre-compute standard deviations for efficiency
 Q_std = sqrt(diag(Q));
+
+% Range and bearing measurements to beacons
+measurement_noise_range = 0.018085189925279;   % Range measurement noise [m]
+measurement_noise_bearing = 0.023174091647608;  % Bearing measurement noise [rad]
+
+% R matrix: [r1, phi1, r2, phi2, r3, phi3] - 3 beacons, 2 measurements each
+R = diag([measurement_noise_range^2, measurement_noise_bearing^2]);
+
+% Pre-compute standard deviations for efficiency
+R_std = sqrt(diag(R));
 
 % Initial state prediction (with error for EKF)
 estimated_state = true_state + [0.5; 0.5; 0.1];  % Just deviate a little
@@ -87,7 +115,8 @@ estimated_state = true_state + [0.5; 0.5; 0.1];  % Just deviate a little
 P = diag([0.5^2, 0.5^2, 0.1^2]);
 
 chi2_threshold = 9.21;  % 99% confidence for 2 DOF
-ekf = EKFLines(estimated_state, P, map_lines, Q, chi2_threshold);
+%ekf = EKFLines(estimated_state, P, map_lines, Q, chi2_threshold);
+ekf = EKFLandmarks(estimated_state, P, beacons, Q, R);
 
 %% Variables to show results
 true_trajectory = zeros(3, num_steps);
@@ -135,6 +164,17 @@ for step = 1:num_steps
     true_state = [apoloLoc(1);apoloLoc(2);apoloLoc(4)];%[x y theta]
     true_trajectory(:, step) = true_state;
 
+    %% Generate Measurements (Range and Bearing to each beacon) - Vectorized
+    % Compute all ranges and bearings at once
+    lm_meas = apoloGetLaserLandMarks(laserName);
+    measurementIDs = lm_meas.id;
+    num_measurements=size(measurementIDs,2)*2;
+    measurements = zeros(num_measurements, 1);
+    measurements(1:2:end) = lm_meas.distance';
+    measurements(2:2:end) = lm_meas.angle';
+    % Normalize bearing angles to [-pi, pi]
+    measurements(2:2:end) = atan2(sin(measurements(2:2:end)), cos(measurements(2:2:end)));
+
     scan = getLaserScan(laserName);
 
     %% EKF PREDICTION STEP
@@ -145,11 +185,15 @@ for step = 1:num_steps
 
     %% EKF UPDATE STEP - Vectorized
     % Lines are observed in the Hessse form
-    lines_observed = ransac_lines(scan, 0.015, 3);  
+    %lines_observed = ransac_lines(scan, 0.015, 3);  
     
     %fprintf('[DEBUG]: %d lines_observed \r',size(lines_observed,1));
 
-    ekf.update(lines_observed);
+    %ekf.update(lines_observed);
+
+    if ~isempty(measurements)
+        ekf.update([measurements(1:2:end),measurements(2:2:end)],measurementIDs);
+    end
 
     %% Store Results
     estimated_trajectory(:, step) = ekf.x;
