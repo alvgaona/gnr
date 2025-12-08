@@ -13,8 +13,8 @@ load('map/garden_lines.mat', 'map_lines');
 num_walls = size(map_lines, 1);
 
 %% Simulation Parameters
-dt = 0.05;                  % Simulation/EKF time step [s] - 50 Hz
-control_dt = 0.1;          % Control time step [s] - 20 Hz
+dt = 0.04;                  % Simulation/EKF time step [s]
+control_dt = 0.1;          % Control time step [s]
 control_rate = control_dt / dt;
 
 %% LiDAR Configuration
@@ -96,7 +96,7 @@ fprintf('Starting NMPC+CBF+EKF simulation with Line Features...\n');
 fprintf('Reference trajectory: %d points, %.1f m length\n', size(traj, 1), traj_length);
 fprintf('Map walls: %d\n', num_walls);
 fprintf('Simulation time: %.1f s\n', Tsim);
-fprintf('Simulation: 50 Hz, Control: 20 Hz, EKF: 50 Hz\n\n');
+fprintf('Simulation: %d Hz, Control: %d Hz, EKF: %d Hz\n\n', 1/dt, 1/control_dt, 1/dt);
 
 x_true = x0_true;
 u_current = [0; 0];
@@ -131,7 +131,7 @@ for k = 1:num_steps-1
 
     true_trajectory(:, k+1) = x_true;
 
-    %% EKF Prediction (50 Hz)
+    %% EKF Prediction
     % Simulate odometry with noise
     state_delta = x_true - x_prev;
     actual_delta_d = norm(state_delta(1:2));
@@ -142,7 +142,7 @@ for k = 1:num_steps-1
 
     ekf.predict(noisy_delta_d, noisy_delta_theta);
 
-    %% EKF Update with LiDAR (50 Hz)
+    %% EKF Update with LiDAR
     scan = scanner.scan(x_true, map_lines);
     scan_history{k} = scan;
 
