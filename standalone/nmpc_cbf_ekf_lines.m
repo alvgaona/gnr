@@ -5,7 +5,9 @@ set(groot, 'defaultLegendInterpreter', 'latex');
 set(groot, 'defaultAxesTickLabelInterpreter', 'latex');
 
 %% Load Reference Trajectory and Map
-load('trayectorias.mat', 'trajDirect');
+trajectories = load('trayectorias.mat');
+traj = trajectories.trajFull;
+
 load('map/garden_lines.mat', 'map_lines');
 
 num_walls = size(map_lines, 1);
@@ -25,7 +27,7 @@ process_noise_beta = 3.9080e-05;    % Heading increment noise [rad]
 Q = diag([process_noise_d^2, process_noise_beta^2]);
 
 % Initial state
-x0_true = trajDirect(1, :)';        % Start at first point of trajectory
+x0_true = traj(1, :)';        % Start at first point of trajectory
 x0_ekf = x0_true + [0.1; 0.1; deg2rad(1)]; % Initial estimate with small error
 P0 = diag([0.1, 0.1, deg2rad(1)].^2);      % Initial uncertainty
 
@@ -57,12 +59,12 @@ omega_max = controller.omega_max;
 
 %% Interpolate Reference Trajectory to Simulation Rate
 % Original trajectory has 84 points, interpolate to finer resolution
-traj_original_time = linspace(0, 1, size(trajDirect, 1));  % Normalized time
+traj_original_time = linspace(0, 1, size(traj, 1));  % Normalized time
 
 % Estimate total simulation time based on trajectory length
 traj_length = 0;
-for i = 1:size(trajDirect, 1)-1
-    traj_length = traj_length + norm(trajDirect(i+1, 1:2) - trajDirect(i, 1:2));
+for i = 1:size(traj, 1)-1
+    traj_length = traj_length + norm(traj(i+1, 1:2) - traj(i, 1:2));
 end
 avg_speed = 1;  % Assume average speed [m/s]
 Tsim = traj_length / avg_speed;
@@ -74,9 +76,9 @@ t_normalized = linspace(0, 1, num_steps);
 
 % Interpolate trajectory
 xref = zeros(num_steps, 3);
-xref(:, 1) = interp1(traj_original_time, trajDirect(:, 1), t_normalized, 'pchip');
-xref(:, 2) = interp1(traj_original_time, trajDirect(:, 2), t_normalized, 'pchip');
-xref(:, 3) = interp1(traj_original_time, trajDirect(:, 3), t_normalized, 'pchip');
+xref(:, 1) = interp1(traj_original_time, traj(:, 1), t_normalized, 'pchip');
+xref(:, 2) = interp1(traj_original_time, traj(:, 2), t_normalized, 'pchip');
+xref(:, 3) = interp1(traj_original_time, traj(:, 3), t_normalized, 'pchip');
 
 %% Initialize Storage
 true_trajectory = zeros(3, num_steps);
@@ -91,7 +93,7 @@ covariance_history(:, 1) = sqrt(diag(P0));
 
 %% Main Simulation Loop
 fprintf('Starting NMPC+CBF+EKF simulation with Line Features...\n');
-fprintf('Reference trajectory: %d points, %.1f m length\n', size(trajDirect, 1), traj_length);
+fprintf('Reference trajectory: %d points, %.1f m length\n', size(traj, 1), traj_length);
 fprintf('Map walls: %d\n', num_walls);
 fprintf('Simulation time: %.1f s\n', Tsim);
 fprintf('Simulation: 50 Hz, Control: 20 Hz, EKF: 50 Hz\n\n');
