@@ -34,8 +34,10 @@ x = x0;
 for k = 1:length(t)-1
     u = controller.compute(x, xref(k:end,:));
 
-    % Apply control to the vehicle
-    x = x + controller.dt * [u(1)*cos(x(3)); u(1)*sin(x(3)); u(2)];
+    % Apply control to the vehicle using ode45 (unicycle dynamics)
+    odefun = @(t, x) unicycle(x, u);
+    [~, x_traj] = ode45(odefun, [0, controller.dt], x);
+    x = x_traj(end, :)';
 
     X = [X; x'];
     U = [U; u'];

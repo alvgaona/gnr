@@ -1,7 +1,6 @@
 clear;
 close all;
 clc;
-rng(0);
 
 set(groot, 'defaultTextInterpreter', 'latex');
 set(groot, 'defaultLegendInterpreter', 'latex');
@@ -12,142 +11,101 @@ set(groot, 'defaultAxesTickLabelInterpreter', 'latex');
 % Map is defined in Hesse form: (d,α).
 % d: perpendicular distance to the origin.
 % α: angle of that vector whose norm is the perpendicular distance.
-hesse_map = HesseMap();
+load('map/garden_lines.mat')
 
-% Add horizontal and vertical lines
-hesse_map.addLine(deg2rad(90), 0);
-hesse_map.addLine(deg2rad(90), 10);
-hesse_map.addLine(deg2rad(0), 0);
-hesse_map.addLine(deg2rad(0), 10);
-
-num_walls = hesse_map.num_lines;
-map_lines = hesse_map.lines;
+num_walls = size(map_lines,1);
 
 %% Vehicle and Simulation Parameters
-dt = 0.1;                          % Discrete time step [s] - 10 Hz
+dt = 0.02;                         % Simulation/EKF time step [s] - 50 Hz
+control_dt = 0.05;                 % Control time step [s] - 20 Hz
 sim_time = 100;                    % Total simulation time [s]
 num_steps = sim_time / dt;         % Total simulation steps
+control_rate = control_dt / dt;    % Control updates every N steps
 
-%% Process Noise (continuous-time)
-process_noise_velocity = 0.05;       % Linear velocity noise [m/s/sqrt(s)]
-process_noise_yaw_rate = deg2rad(2); % Yaw rate noise [rad/s/sqrt(s)]
-
-%% Ground-truth Trajectory
+%% Initialize storage
 true_trajectory = zeros(3, num_steps);      % [x; y; theta]
 control_history = zeros(2, num_steps);      % [v; omega]
+estimated_trajectory = zeros(3, num_steps);
+covariance_history = zeros(3, num_steps);
+
+% Initial state
 true_trajectory(:, 1) = [1; 1; 0];          % Start at (1,1) heading east
 
-nominal_velocity = 0.5; % Nominal speed [m/s]
-for k = 1:num_steps-1
-    if mod(k, 100) < 75
-        control_history(:, k) = [nominal_velocity; 0];
-    else
-        control_history(:, k) = [nominal_velocity; deg2rad(30)];
-    end
-
-    v = control_history(1, k);
-    omega = control_history(2, k);
-
-    % Integrate using Euler method (we could use more accurate methods)
-    theta_k = true_trajectory(3, k);
-    true_trajectory(:, k+1) = [
-        true_trajectory(1, k) + v * dt * cos(theta_k);
-        true_trajectory(2, k) + v * dt * sin(theta_k);
-        theta_k + omega * dt
-    ];
-end
-
-%% Dead Reckoning (open-loop)
-dead_reckoning_trajectory = zeros(3, num_steps);
-dead_reckoning_trajectory(:, 1) = true_trajectory(:, 1);
-
-% Noise parameters for random walk drift
-drift_noise_x = 0.005;            % Position drift diffusion [m/sqrt(s)]
-drift_noise_y = 0.005;            % Position drift diffusion [m/sqrt(s)]
-drift_noise_theta = deg2rad(0.2); % Heading drift diffusion [rad/sqrt(s)]
-
-% Initialize accumulated drift
-accumulated_drift = [0; 0; 0];
-
-for k = 1:num_steps-1
-    accumulated_drift = accumulated_drift + [
-        drift_noise_x * randn * sqrt(dt);
-        drift_noise_y * randn * sqrt(dt);
-        drift_noise_theta * randn * sqrt(dt)
-    ];
-
-    v = control_history(1, k);
-    omega = control_history(2, k);
-
-    theta_k = dead_reckoning_trajectory(3, k);
-    propagated_state = dead_reckoning_trajectory(:, k) + [
-        v * dt * cos(theta_k);
-        v * dt * sin(theta_k);
-        omega * dt
-    ];
-
-    dead_reckoning_trajectory(:, k+1) = propagated_state + accumulated_drift;
-end
-
 %% EKF Initialization
-x = dead_reckoning_trajectory(:, 1);  % Initial state
+x = true_trajectory(:, 1);  % Initial state
 P = diag([0.1 0.1 deg2rad(1)].^2);    % Initial state covariance
 
 % Process noise covariance for odometry [Δd, Δβ]
-process_noise_d = process_noise_velocity;      % Distance increment noise [m]
-process_noise_beta = process_noise_yaw_rate;   % Heading increment noise [rad]
+process_noise_d = 9.5003e-05;      % Distance increment noise [m]
+process_noise_beta = 3.9080e-05;   % Heading increment noise [rad]
 Q = diag([process_noise_d^2, process_noise_beta^2]);
 
 % Create EKF instance
 chi2_threshold = 9.21;  % 99% confidence for 2 DOF
 ekf = EKFLines(x, P, map_lines, Q, chi2_threshold);
 
-estimated_trajectory = zeros(3, num_steps);
 estimated_trajectory(:, 1) = x;
-
-% Storage for covariance history
-covariance_history = zeros(3, num_steps);
 covariance_history(:, 1) = sqrt(diag(P));
 
 %% Set up laser sensor
-scanner = LMSScanner('LMS100', 'MaxRange', 10, 'NoiseStd', 0.01);
+scanner = LMSScanner('LMS100', 'MaxRange', 10, 'NoiseStd', 0.018085189925279);
 
-%% Main EKF Loop
-for k = 2:num_steps
+%% Main Simulation Loop (50 Hz)
+nominal_velocity = 0.5; % Nominal speed [m/s]
+u_current = [nominal_velocity; 0]; % Initialize control
+
+for k = 1:num_steps-1
+    % Update control at 20 Hz (every control_rate steps)
+    if mod(k-1, round(control_rate)) == 0
+        if mod(k, 500) < 375  % Adjusted for 50 Hz (was 100/75 at 10 Hz)
+            u_current = [nominal_velocity; 0];
+        else
+            u_current = [nominal_velocity; deg2rad(30)];
+        end
+    end
+
+    control_history(:, k) = u_current;
+
+    % Propagate true state using ode45 with unicycle dynamics
+    odefun = @(t, x) unicycle(x, u_current);
+    [~, x_traj] = ode45(odefun, [0, dt], true_trajectory(:, k));
+    true_trajectory(:, k+1) = x_traj(end, :)';
+
     % Simulate odometry sensors
-    state_delta = true_trajectory(:, k) - true_trajectory(:, k-1);
+    state_delta = true_trajectory(:, k+1) - true_trajectory(:, k);
     actual_delta_d = norm(state_delta(1:2));
     actual_delta_theta = state_delta(3);
 
     % Add odometry measurement noise
     noisy_delta_d = actual_delta_d + process_noise_d * sqrt(dt) * randn;
     noisy_delta_theta = actual_delta_theta + process_noise_beta * sqrt(dt) * randn;
-    
+
     % EKF Prediction with noisy odometry [Δd, Δβ]
     ekf.predict(noisy_delta_d, noisy_delta_theta);
 
-    % EKF Update
-    scan = scanner.scan(true_trajectory(:, k), map_lines);
+    % EKF Update with LiDAR
+    scan = scanner.scan(true_trajectory(:, k+1), map_lines);
 
-    % Lines are observed in the Hessse form
-    lines_observed = ransac_lines(scan, 0.02, 5);  
+    % Extract lines from scan using RANSAC
+    lines_observed = ransac_lines(scan, 0.015, 3);
 
     ekf.update(lines_observed);
-    
-    % Store variables of interest
-    estimated_trajectory(:, k) = ekf.x;
-    covariance_history(:, k) = sqrt(diag(ekf.P)); % Store standard deviations
+
+    % Store EKF estimates
+    estimated_trajectory(:, k+1) = ekf.x;
+    covariance_history(:, k+1) = sqrt(diag(ekf.P)); % Store standard deviations
 end
 
 %% Compute Estimation Errors
-position_error_dr = sqrt(sum((dead_reckoning_trajectory(1:2, :) - true_trajectory(1:2, :)).^2, 1));
 position_error_ekf = sqrt(sum((estimated_trajectory(1:2, :) - true_trajectory(1:2, :)).^2, 1));
+heading_error_ekf = estimated_trajectory(3, :) - true_trajectory(3, :);
+heading_error_ekf = atan2(sin(heading_error_ekf), cos(heading_error_ekf));  % Normalize to [-pi, pi]
 time_vector = (0:num_steps-1) * dt;
 
 %% Visualization (ignore logic)
-fig_animation = figure('Name', 'EKF Animation', 'Position', [50 50 1400 800]);
+fig_animation = figure('Name', 'EKF Animation', 'Position', [50 50 1400 1000]);
 
-subplot(2, 2, [1 3]);
+subplot(2, 3, [1 4]);
 hold on; grid on; axis equal;
 
 % Draw map walls once
@@ -161,7 +119,6 @@ for w = 1:num_walls
 end
 
 h_true_traj = plot(true_trajectory(1, 1), true_trajectory(2, 1), 'b-', 'LineWidth', 2);
-h_dead_traj = plot(dead_reckoning_trajectory(1, 1), dead_reckoning_trajectory(2, 1), 'c--', 'LineWidth', 1.5);
 h_est_traj = plot(estimated_trajectory(1, 1), estimated_trajectory(2, 1), 'r--', 'LineWidth', 2);
 h_true_robot = plot(true_trajectory(1, 1), true_trajectory(2, 1), 'bo', 'MarkerSize', 12, 'MarkerFaceColor', 'b');
 h_est_robot = plot(estimated_trajectory(1, 1), estimated_trajectory(2, 1), 'ro', 'MarkerSize', 12, 'MarkerFaceColor', 'r');
@@ -179,22 +136,30 @@ h_lidar_rays = plot(NaN, NaN, 'Color', [1 0.5 0.5], 'LineWidth', 0.5);
 h_lidar_points = plot(NaN, NaN, 'r.', 'MarkerSize', 4);
 h_observed = plot(NaN, NaN, 'g-', 'LineWidth', 2);
 
-legend([h_map, h_true_traj, h_dead_traj, h_est_traj, h_rays_hits, h_rays_misses, h_scan_hits, h_scan_misses, h_observed], ...
-       {'Map Walls', 'True Trajectory', 'Dead Reckoning', 'EKF Estimate', ...
+legend([h_map, h_true_traj, h_est_traj, h_rays_hits, h_rays_misses, h_scan_hits, h_scan_misses, h_observed], ...
+       {'Map Walls', 'True Trajectory', 'EKF Estimate', ...
         'LiDAR Hits', 'LiDAR Misses', 'Hit Points', 'Miss Points', 'Observed Lines'}, ...
        'Location', 'best', 'AutoUpdate', 'off');
 xlim([-5 12]); ylim([-5 12]);
 
-subplot(2, 2, 2);
+subplot(2, 3, 2);
 hold on; grid on;
-h_error_dr = plot(time_vector(1), position_error_dr(1), 'c-', 'LineWidth', 1.5);
 h_error_ekf = plot(time_vector(1), position_error_ekf(1), 'r-', 'LineWidth', 2);
 xlabel('Time [s]'); ylabel('Position Error [m]');
 title('Position Error');
-legend('Dead Reckoning', 'Line-EKF', 'Location', 'best', 'AutoUpdate', 'off');
-xlim([0 sim_time]); ylim([0 max(max(position_error_dr), max(position_error_ekf)) * 1.1]);
+legend('Line-EKF', 'Location', 'best', 'AutoUpdate', 'off');
+xlim([0 sim_time]); ylim([0 max(position_error_ekf) * 1.1]);
 
-subplot(2, 2, 4);
+subplot(2, 3, 3);
+hold on; grid on;
+h_heading_error = plot(time_vector(1), rad2deg(heading_error_ekf(1)), 'b-', 'LineWidth', 2);
+xlabel('Time [s]'); ylabel('Heading Error [deg]');
+title('Heading Error');
+legend('Line-EKF', 'Location', 'best', 'AutoUpdate', 'off');
+xlim([0 sim_time]);
+ylim([min(rad2deg(heading_error_ekf))*1.1, max(rad2deg(heading_error_ekf))*1.1]);
+
+subplot(2, 3, 5);
 hold on; grid on;
 h_cov_x = plot(time_vector(1), covariance_history(1, 1), 'r-', 'LineWidth', 1.5);
 h_cov_y = plot(time_vector(1), covariance_history(2, 1), 'g-', 'LineWidth', 1.5);
@@ -205,12 +170,11 @@ legend('$\sigma_x$ [m]', '$\sigma_y$ [m]', '$\sigma_\theta$ [deg]', 'Location', 
 xlim([0 sim_time]);
 ylim([0 max([max(covariance_history(1:2, :)), rad2deg(max(covariance_history(3, :)))]) * 1.1]);
 
-animation_step = 5; 
+animation_step = 5;
 for k = 1:animation_step:num_steps
-    subplot(2, 2, [1 3]);
+    subplot(2, 3, [1 4]);
 
     set(h_true_traj, 'XData', true_trajectory(1, 1:k), 'YData', true_trajectory(2, 1:k));
-    set(h_dead_traj, 'XData', dead_reckoning_trajectory(1, 1:k), 'YData', dead_reckoning_trajectory(2, 1:k));
     set(h_est_traj, 'XData', estimated_trajectory(1, 1:k), 'YData', estimated_trajectory(2, 1:k));
 
     set(h_true_robot, 'XData', true_trajectory(1, k), 'YData', true_trajectory(2, k));
@@ -303,11 +267,13 @@ for k = 1:animation_step:num_steps
         h_observed_lines = [h_observed_lines; h];
     end
 
-    subplot(2, 2, 2);
-    set(h_error_dr, 'XData', time_vector(1:k), 'YData', position_error_dr(1:k));
+    subplot(2, 3, 2);
     set(h_error_ekf, 'XData', time_vector(1:k), 'YData', position_error_ekf(1:k));
 
-    subplot(2, 2, 4);
+    subplot(2, 3, 3);
+    set(h_heading_error, 'XData', time_vector(1:k), 'YData', rad2deg(heading_error_ekf(1:k)));
+
+    subplot(2, 3, 5);
     set(h_cov_x, 'XData', time_vector(1:k), 'YData', covariance_history(1, 1:k));
     set(h_cov_y, 'XData', time_vector(1:k), 'YData', covariance_history(2, 1:k));
     set(h_cov_theta, 'XData', time_vector(1:k), 'YData', rad2deg(covariance_history(3, 1:k)));

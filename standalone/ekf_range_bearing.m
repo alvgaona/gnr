@@ -4,12 +4,17 @@ clc;
 
 %% Vehicle and Simulation Parameters
 b = 0.5;                    % Track width (wheel separation) [m]
-time_step = 0.2;            % Discrete time step [s]
-simulation_time = 100;       % Total simulation time [s]
-num_steps = simulation_time / time_step;
+dt = 0.02;                  % Simulation/EKF time step [s] - 50 Hz
+control_dt = 0.05;          % Control time step [s] - 20 Hz
+simulation_time = 100;      % Total simulation time [s]
+num_steps = simulation_time / dt;  % Total simulation steps
+control_rate = control_dt / dt;    % Control updates every N steps
 
 %% Define Trajectory
 trajectory_type = 'curve';  % Options: 'linear', 'circular', 'curve'
+
+% Create time vector for trajectory generation
+t = (0:num_steps-1) * dt;
 
 switch trajectory_type
     case 'linear'
@@ -24,7 +29,7 @@ switch trajectory_type
     case 'curve'
         % Curved path with varying angular velocity
         velocity_profile = 1.5 * ones(1, num_steps); % Constant 1.5 m/s
-        angular_velocity_profile = 0.2 * sin(2*pi*(0:num_steps-1)/num_steps); % Sinusoidal rotation [rad/s]
+        angular_velocity_profile = 0.2 * sin(2*pi*t/simulation_time); % Sinusoidal rotation [rad/s]
 end
 
 
@@ -41,8 +46,8 @@ Q_std = sqrt(diag(Q));
 %% Measurement Noise
 
 % Range and bearing measurements to beacons
-measurement_noise_range = 0.1;   % Range measurement noise [m]
-measurement_noise_bearing = 0.05;  % Bearing measurement noise [rad]
+measurement_noise_range = 0.018085189925279;   % Range measurement noise [m]
+measurement_noise_bearing = 0.023174091647608;  % Bearing measurement noise [rad]
 max_detection_range = 18.0;       % Maximum sensor range [m]
 
 % R matrix: [r1, phi1, r2, phi2, r3, phi3] - 3 beacons, 2 measurements each
@@ -86,24 +91,23 @@ variance_history = zeros(3, num_steps);
 control_history = zeros(2, num_steps);
 
 %% Main Simulation Loop
+v_current = velocity_profile(1);      % Initialize control
+omega_current = angular_velocity_profile(1);
 
 for step = 1:num_steps
     % Store previous state to compute actual displacement
     prev_state = true_state;
 
-    % Differential drive control inputs: linear velocity (v) and angular velocity (ω)
-    v = velocity_profile(step);
-    omega = angular_velocity_profile(step);
+    % Update control at 20 Hz (every control_rate steps)
+    if mod(step-1, round(control_rate)) == 0
+        v_current = velocity_profile(step);
+        omega_current = angular_velocity_profile(step);
+    end
 
-    % Use Euler method for integration
-    theta_k = true_state(3);
-
-    % Update true state with Euler integration
-    true_state = [
-        true_state(1) + time_step * v * cos(theta_k);
-        true_state(2) + time_step * v * sin(theta_k);
-        theta_k + time_step * omega
-    ];
+    % Update true state using ode45 with unicycle dynamics
+    odefun = @(t, x) unicycle(x, [v_current; omega_current]);
+    [~, x_traj] = ode45(odefun, [0, dt], true_state);
+    true_state = x_traj(end, :)';
 
     %% Compute Odometry Measurements [Δd, Δβ] from true motion - Vectorized
     % This is what the EKF actually observes (with noise)
@@ -227,7 +231,7 @@ xlim([min(true_trajectory(1,:))-5, max(true_trajectory(1,:))+5]);
 ylim([min(true_trajectory(2,:))-5, max(true_trajectory(2,:))+5]);
 
 % Plot 2: Position Error
-time_vector = (0:num_steps-1) * time_step;
+time_vector = (0:num_steps-1) * dt;
 subplot(2,3,2);
 hold on; grid on;
 h_error = plot(time_vector(1), position_error(1), 'm-', 'LineWidth', 2);
@@ -354,7 +358,7 @@ for k = 1:animation_step:num_steps
     set(h_theta_est, 'XData', time_vector(1:k), 'YData', rad2deg(estimated_trajectory_wrapped(3, 1:k)));
 
     drawnow('limitrate');
-    pause(0.05);
+    pause(0.001);
 end
 
 figure(fig_animation);
@@ -367,7 +371,8 @@ fprintf('EKF Control Input:      Odometry [Δd, Δβ]\n');
 fprintf('Measurement Model:      Range + Bearing to %d beacons\n', num_beacons);
 fprintf('Trajectory Type:        %s\n', trajectory_type);
 fprintf('Track Width (b):        %.2f m\n', b);
-fprintf('Time Step:              %.2f s\n', time_step);
+fprintf('EKF Time Step:          %.3f s (50 Hz)\n', dt);
+fprintf('Control Time Step:      %.3f s (20 Hz)\n', control_dt);
 fprintf('Simulation Time:        %.2f s\n', simulation_time);
 fprintf('Number of Steps:        %d\n', num_steps);
 fprintf('\nMeasurement Noise:\n');
