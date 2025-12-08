@@ -5,16 +5,109 @@ classdef EKFLandmarks < handle
         P           % State covariance matrix (3x3)
         landmarks   % Landmark positions [x, y] (Nx2)
         Q           % Process noise covariance [Δd; Δβ] (2x2)
+        R           % Measurement noise covariance per landmark (2x2 or 1x1)
+        chi2_tresh  % χ2 threshold [for 2-DOF, 95% (5.991), 99% (9.210)]
     end
 
     methods
         function obj = EKFLandmarks(initial_state, initial_covariance, ...
-                                    landmarks, process_noise_cov)
+                                    landmarks, process_noise_cov, ...
+                                    measurement_noise_cov, ...
+                                    chi2_tresh)
             % Constructor
+            arguments
+                initial_state
+                initial_covariance
+                landmarks
+                process_noise_cov
+                measurement_noise_cov
+                chi2_tresh (1,1) double {mustBePositive} = 9.21
+            end
+
             obj.x = initial_state(:);
             obj.P = initial_covariance;
             obj.landmarks = landmarks;
             obj.Q = process_noise_cov;
+            obj.R = measurement_noise_cov;
+            obj.chi2_tresh = chi2_tresh;
+        end
+
+        function [matched_ids, matched_obs] = associate_landmarks(obj, observations)
+            % associate_landmarks - Match observations to map landmarks
+            %
+            % Inputs:
+            %   observations: Mx2 [range, bearing] or Mx1 [bearing] in robot frame
+            %
+            % Outputs:
+            %   matched_ids: Kx1 vector of landmark indices (K <= M)
+            %   matched_obs: Kx2 or Kx1 matched observations
+
+            num_obs = size(observations, 1);
+            has_range = size(observations, 2) == 2;
+
+            matched_ids = [];
+            matched_obs = [];
+
+            % Predict what each landmark should look like from current pose
+            num_landmarks = size(obj.landmarks, 1);
+            dx_all = obj.landmarks(:,1) - obj.x(1);
+            dy_all = obj.landmarks(:,2) - obj.x(2);
+            ranges_pred = sqrt(dx_all.^2 + dy_all.^2);
+            bearings_world = atan2(dy_all, dx_all);
+            bearings_pred = bearings_world - obj.x(3);
+            bearings_pred = atan2(sin(bearings_pred), cos(bearings_pred));
+
+            % For each observation, find the best matching landmark
+            for i = 1:num_obs
+                z_obs = observations(i, :)';
+
+                min_distance = inf;
+                best_idx = -1;
+
+                % Compare against all landmarks
+                for j = 1:num_landmarks
+                    if has_range
+                        % Range-bearing
+                        z_pred = [ranges_pred(j); bearings_pred(j)];
+                        innovation = z_obs - z_pred;
+                        innovation(2) = atan2(sin(innovation(2)), cos(innovation(2)));
+
+                        dist = sqrt(innovation' / obj.R * innovation);
+                    else
+                        % Bearing-only
+                        z_pred = bearings_pred(j);
+                        innovation = z_obs - z_pred;
+                        innovation = atan2(sin(innovation), cos(innovation));
+                        dist = abs(innovation) / sqrt(obj.R);
+                    end
+
+                    if dist < min_distance
+                        min_distance = dist;
+                        best_idx = j;
+                    end
+                end
+
+                % Accept match if within threshold (in Mahalanobis distance)
+                if min_distance < obj.chi2_tresh  % Conservative threshold
+                    matched_ids = [matched_ids; best_idx];
+                    matched_obs = [matched_obs; observations(i, :)];
+                end
+            end
+
+            % Ensure unique matches (each landmark matched at most once)
+            if ~isempty(matched_ids)
+                [unique_ids, first_occurrence] = unique(matched_ids, 'stable');
+                matched_ids = unique_ids;
+                matched_obs = matched_obs(first_occurrence, :);
+            end
+
+            % Debug output (can be removed later)
+            if ~isempty(matched_ids)
+                fprintf('Association: %d observations -> %d matches: [%s]\n', ...
+                        num_obs, length(matched_ids), num2str(matched_ids'));
+            else
+                fprintf('Association: %d observations -> 0 matches\n', num_obs);
+            end
         end
 
         function predict(obj, delta_d, delta_theta)
@@ -51,85 +144,88 @@ classdef EKFLandmarks < handle
             obj.P = A * obj.P * A' + W * obj.Q * W';
         end
 
-        function update(obj, measurements, R)
+        function update(obj, measurements, landmark_ids)
             % update - EKF update step using landmark observations
-            num_landmarks = size(obj.landmarks, 1);
-            num_measurements = length(measurements);
+            %
+            % Inputs:
+            %   measurements: Mx2 [range, bearing] or Mx1 [bearing] observations
+            %   landmark_ids: Mx1 vector of known landmark IDs (optional)
 
-            % Determine if we have range or bearing-only
-            has_range = (num_measurements == 2 * num_landmarks);
+            % Step 1: Data association (if IDs not provided)
+            if nargin < 3 || isempty(landmark_ids)
+                [matched_ids, matched_obs] = obj.associate_landmarks(measurements);
 
-            % Compute predicted measurements - Vectorized
-            dx_pred = obj.landmarks(:,1) - obj.x(1);
-            dy_pred = obj.landmarks(:,2) - obj.x(2);
-            dist_sq = dx_pred.^2 + dy_pred.^2;
-            ranges_pred = sqrt(dist_sq);
-
-            % Predicted bearings (relative to robot heading)
-            predicted_bearings = atan2(dy_pred, dx_pred);
-            predicted_relative_bearings = predicted_bearings - obj.x(3);
-
-            % Normalize to [-pi, pi]
-            predicted_relative_bearings = atan2(sin(predicted_relative_bearings), ...
-                                                cos(predicted_relative_bearings));
-
-            if has_range
-                % Range-and-bearing measurements: [r1, phi1, r2, phi2, ...]
-                % Build predicted measurement vector
-                predicted_measurements = zeros(num_measurements, 1);
-                predicted_measurements(1:2:end) = ranges_pred;
-                predicted_measurements(2:2:end) = predicted_relative_bearings;
-
-                % Normalize bearing predictions
-                predicted_measurements(2:2:end) = atan2(sin(predicted_measurements(2:2:end)), ...
-                                                        cos(predicted_measurements(2:2:end)));
-
-                % Measurement Jacobian H (2Nx3 matrix)
-                H = zeros(num_measurements, 3);
-                for i = 1:num_landmarks
-                    row_range = 2*i - 1;
-                    row_bearing = 2*i;
-
-                    % Range measurement Jacobian
-                    H(row_range, 1) = -dx_pred(i) / ranges_pred(i);  % ∂r/∂x
-                    H(row_range, 2) = -dy_pred(i) / ranges_pred(i);  % ∂r/∂y
-                    H(row_range, 3) = 0;                             % ∂r/∂θ
-
-                    % Bearing measurement Jacobian
-                    H(row_bearing, 1) = dy_pred(i) / dist_sq(i);     % ∂φ/∂x
-                    H(row_bearing, 2) = -dx_pred(i) / dist_sq(i);    % ∂φ/∂y
-                    H(row_bearing, 3) = -1;                          % ∂φ/∂θ
+                % If no landmarks matched, skip update
+                if isempty(matched_ids)
+                    return;
                 end
-
-                % Innovation with angle normalization
-                innovation = measurements - predicted_measurements;
-                innovation(2:2:end) = atan2(sin(innovation(2:2:end)), cos(innovation(2:2:end)));
             else
-                % Bearing-only measurements: [phi1; phi2; ...]
-                predicted_measurements = predicted_relative_bearings;
-
-                % Measurement Jacobian (Nx3 matrix)
-                H = [dy_pred ./ dist_sq, -dx_pred ./ dist_sq, -ones(num_landmarks, 1)];
-
-                % Innovation with angle normalization
-                innovation = measurements - predicted_measurements;
-                innovation = atan2(sin(innovation), cos(innovation));
+                % IDs provided, use measurements directly
+                matched_ids = landmark_ids(:);
+                matched_obs = measurements;
             end
 
-            % Innovation covariance
-            S = H * obj.P * H' + R;
+            % Determine if we have range or bearing-only
+            has_range = (size(matched_obs, 2) == 2);
 
-            % Kalman gain
-            K = obj.P * H' / S;
+            % Step 2: Sequential update for each matched observation
+            for i = 1:length(matched_ids)
+                landmark_id = matched_ids(i);
+                landmark_pos = obj.landmarks(landmark_id, :);
 
-            % Update state estimate
-            obj.x = obj.x + K * innovation;
+                % Compute prediction for this landmark
+                dx = landmark_pos(1) - obj.x(1);
+                dy = landmark_pos(2) - obj.x(2);
+                dist_sq = dx^2 + dy^2;
+                range_pred = sqrt(dist_sq);
 
-            % Normalize theta to [-pi, pi]
-            obj.x(3) = atan2(sin(obj.x(3)), cos(obj.x(3)));
+                % Predicted bearing (relative to robot heading)
+                bearing_world = atan2(dy, dx);
+                bearing_pred = bearing_world - obj.x(3);
+                bearing_pred = atan2(sin(bearing_pred), cos(bearing_pred));
 
-            % Update covariance
-            obj.P = (eye(3) - K * H) * obj.P;
+                if has_range
+                    % Range-and-bearing measurement for this landmark
+                    z = matched_obs(i, :)';  % [r; phi]
+                    z_pred = [range_pred; bearing_pred];
+
+                    % Measurement Jacobian (2x3)
+                    H = [
+                        -dx / range_pred,  -dy / range_pred,   0;    % ∂r/∂[x,y,θ]
+                        dy / dist_sq,      -dx / dist_sq,      -1    % ∂φ/∂[x,y,θ]
+                    ];
+
+                    % Innovation with angle normalization
+                    innovation = z - z_pred;
+                    innovation(2) = atan2(sin(innovation(2)), cos(innovation(2)));
+                else
+                    % Bearing-only measurement
+                    z = matched_obs(i);
+                    z_pred = bearing_pred;
+
+                    % Measurement Jacobian (1x3)
+                    H = [dy / dist_sq, -dx / dist_sq, -1];
+
+                    % Innovation with angle normalization
+                    innovation = z - z_pred;
+                    innovation = atan2(sin(innovation), cos(innovation));
+                end
+
+                % Innovation covariance
+                S = H * obj.P * H' + obj.R;
+
+                % Kalman gain
+                K = obj.P * H' / S;
+
+                % Update state estimate
+                obj.x = obj.x + K * innovation;
+
+                % Normalize theta to [-pi, pi]
+                obj.x(3) = atan2(sin(obj.x(3)), cos(obj.x(3)));
+
+                % Update covariance
+                obj.P = (eye(3) - K * H) * obj.P;
+            end
         end
     end
 end
