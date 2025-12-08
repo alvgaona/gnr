@@ -1,6 +1,6 @@
 classdef NMPCCBFController < handle
     % NMPCCBFController - Nonlinear MPC with Control Barrier Functions
-    
+
     properties (SetAccess = private)
         % NMPC parameters
         N               % Prediction horizon length
@@ -19,12 +19,22 @@ classdef NMPCCBFController < handle
         alpha_cbf       % CBF aggressiveness parameter
         scan_downsample % Downsample factor for scan constraints
         constraint_range % Maximum range for CBF constraints [m]
+        slack_penalty   % Penalty weight for constraint violations
+        use_slack       % Enable slack variables for soft constraints
 
-        % Optimization settings
-        opt_options     % fmincon options
+        % CasADi/IPOPT settings
+        solver_options  % IPOPT options
+        max_iterations  % Maximum solver iterations
+
+        % Pre-built base optimization problem (no CBF)
+        opti_base       % CasADi Opti instance (base problem)
+        U_var           % Control decision variables (2xN)
+        X_var           % State trajectory variables (3xN+1)
+        x0_param        % Initial state parameter (3x1)
+        xref_param      % Reference trajectory parameter (N+1 x 3)
 
         % State for warm-starting
-        last_u          % Last control input (2x1)
+        last_u          % Last control input (2xN)
     end
 
     methods
@@ -42,6 +52,8 @@ classdef NMPCCBFController < handle
                 options.ScanDownsample (1,1) double {mustBePositive, mustBeInteger} = 50
                 options.ConstraintRange (1,1) double {mustBePositive} = 2.0
                 options.MaxIterations (1,1) double {mustBePositive} = 100
+                options.UseSlack (1,1) logical = false
+                options.SlackPenalty (1,1) double {mustBePositive} = 1000
             end
 
             obj.N = options.HorizonLength;
@@ -58,19 +70,67 @@ classdef NMPCCBFController < handle
             obj.alpha_cbf = options.AlphaCBF;
             obj.scan_downsample = options.ScanDownsample;
             obj.constraint_range = options.ConstraintRange;
+            obj.use_slack = options.UseSlack;
+            obj.slack_penalty = options.SlackPenalty;
 
-            obj.opt_options = optimoptions('fmincon', ...
-                'Algorithm', 'sqp', ...
-                'Display', 'off', ...
-                'MaxIterations', options.MaxIterations);
+            % Configure IPOPT solver options
+            obj.solver_options = struct();
+            obj.solver_options.ipopt.print_level = 0;
+            obj.solver_options.ipopt.max_iter = options.MaxIterations;
+            obj.solver_options.ipopt.acceptable_tol = 1e-6;
+            obj.solver_options.ipopt.acceptable_obj_change_tol = 1e-6;
+            obj.solver_options.ipopt.warm_start_init_point = 'yes';
+            obj.solver_options.print_time = false;
+            obj.solver_options.verbose = false;
 
-            obj.last_u = [0; 0];
+            obj.last_u = zeros(2, obj.N);
+
+            % Build base optimization problem once (no CBF constraints)
+            obj.buildBaseOptimizationProblem();
+        end
+
+        function buildBaseOptimizationProblem(obj)
+            % Build the base NMPC problem structure (no CBF, those added per solve)
+            import casadi.*
+
+            obj.opti_base = casadi.Opti();
+
+            % Decision variables
+            obj.U_var = obj.opti_base.variable(2, obj.N);
+            obj.X_var = obj.opti_base.variable(3, obj.N+1);
+
+            % Parameters
+            obj.x0_param = obj.opti_base.parameter(3, 1);
+            obj.xref_param = obj.opti_base.parameter(obj.N+1, 3);
+
+            % Initial condition constraint
+            obj.opti_base.subject_to(obj.X_var(:,1) == obj.x0_param);
+
+            % Dynamics constraints
+            for k = 1:obj.N
+                x_next = obj.X_var(:,k) + obj.dt * [
+                    obj.U_var(1,k)*cos(obj.X_var(3,k));
+                    obj.U_var(1,k)*sin(obj.X_var(3,k));
+                    obj.U_var(2,k)
+                ];
+                obj.opti_base.subject_to(obj.X_var(:,k+1) == x_next);
+            end
+
+            % Control constraints
+            obj.opti_base.subject_to(obj.v_min <= obj.U_var(1,:) <= obj.v_max);
+            obj.opti_base.subject_to(obj.omega_min <= obj.U_var(2,:) <= obj.omega_max);
+
+            % Note: Cost function will be set in compute() to allow for slack penalty
+            % Set solver
+            obj.opti_base.solver('ipopt', obj.solver_options);
         end
 
         function u = compute(obj, x, xref, scan)
-            % compute - Compute control signal
+            % compute - Compute control signal using pre-built Opti + dynamic CBF
+            import casadi.*
+
             x = x(:);
-            
+
             % Trajectory provided - use first N+1 points
             xref_horizon = xref(1:min(obj.N+1, size(xref,1)), :);
 
@@ -80,102 +140,111 @@ classdef NMPCCBFController < handle
                     obj.N + 1 - size(xref_horizon, 1), 1)];
             end
 
-            % Initial guess (warm start with last control)
-            u0 = repmat(obj.last_u', obj.N, 1);
-            u0 = u0(:);
+            % Filter scan: valid readings within constraint range
+            valid = ~isnan(scan(:,1)) & scan(:,1) < obj.constraint_range;
+            valid_idx = find(valid);
 
-            % Lower and upper bound for the control signal
-            lb = repmat([obj.v_min; obj.omega_min], obj.N, 1);
-            ub = repmat([obj.v_max; obj.omega_max], obj.N, 1);
+            if ~isempty(valid_idx)
+                valid_idx = valid_idx(1:obj.scan_downsample:end);
+                ranges = scan(valid_idx, 1);
+                bearings = scan(valid_idx, 2);
+                n_obstacles = length(ranges);
+            else
+                ranges = [];
+                bearings = [];
+                n_obstacles = 0;
+            end
 
-            % Solve optimization problem
-            u_opt = fmincon(@(u) obj.costFunction(u, x, xref_horizon), ...
-                u0, [], [], [], [], lb, ub, ...
-                @(u) obj.cbfConstraints(u, x, scan), ...
-                obj.opt_options);
+            % Copy base optimization problem (has structure, variables, base constraints)
+            opti = obj.opti_base.copy();
 
-            % Extract first and ignore horizon control signals
-            u = u_opt(1:2);
+            % Get references to variables from copied problem
+            U = obj.U_var;
+            X = obj.X_var;
 
-            obj.last_u = u;
-        end
+            % Set parameter values
+            opti.set_value(obj.x0_param, x);
+            opti.set_value(obj.xref_param, xref_horizon);
 
-        function reset(obj)
-            obj.last_u = [0; 0];
-        end
-    end
-
-    methods (Access = private)
-        function J = costFunction(obj, u_seq, x0, xref)
-            u_seq = reshape(u_seq, 2, obj.N)';
-            x = x0;
-            J = 0;
-
+            % Build cost function
+            cost = 0;
             for k = 1:obj.N
-                u = u_seq(k, :)';
-
                 % State tracking error
-                x_err = x - xref(k, :)';
-                J = J + x_err' * obj.Q * x_err;
+                x_err = X(:,k) - obj.xref_param(k,:)';
+                cost = cost + x_err' * obj.Q * x_err;
 
                 % Control effort
-                J = J + u' * obj.R * u;
-
-                % Propagate unicycle dynamics
-                x = x + obj.dt * [u(1)*cos(x(3)); u(1)*sin(x(3)); u(2)];
+                cost = cost + U(:,k)' * obj.R * U(:,k);
             end
 
             % Terminal cost
-            x_err = x - xref(obj.N+1, :)';
-            J = J + x_err' * obj.Q * x_err;
+            x_err = X(:,obj.N+1) - obj.xref_param(obj.N+1,:)';
+            cost = cost + x_err' * obj.Q * x_err;
+
+            % Add CBF constraints dynamically (only if obstacles present)
+            if n_obstacles > 0
+                if obj.use_slack
+                    % Create slack variables for soft constraints
+                    S = opti.variable(n_obstacles, obj.N);
+
+                    % Slack must be non-negative (element-wise)
+                    for i = 1:n_obstacles
+                        for k = 1:obj.N
+                            opti.subject_to(S(i,k) >= 0);
+                        end
+                    end
+
+                    % Add CBF constraints with slack
+                    for k = 1:obj.N
+                        v = U(1,k);
+                        omega = U(2,k);
+
+                        h = ranges - obj.d_safe;
+                        h_dot = -v * cos(bearings) - ranges .* omega .* sin(bearings);
+
+                        for i = 1:n_obstacles
+                            opti.subject_to(h_dot(i) + obj.alpha_cbf * h(i) + S(i,k) >= 0);
+                        end
+                    end
+
+                    % Add slack penalty to cost
+                    cost = cost + obj.slack_penalty * sum(sum(S.^2));
+                else
+                    % Hard CBF constraints
+                    for k = 1:obj.N
+                        v = U(1,k);
+                        omega = U(2,k);
+
+                        h = ranges - obj.d_safe;
+                        h_dot = -v * cos(bearings) - ranges .* omega .* sin(bearings);
+
+                        for i = 1:n_obstacles
+                            opti.subject_to(h_dot(i) + obj.alpha_cbf * h(i) >= 0);
+                        end
+                    end
+                end
+            end
+
+            % Set the objective function
+            opti.minimize(cost);
+
+            % Set initial guess (warm start)
+            opti.set_initial(U, obj.last_u);
+
+            % Solve
+            try
+                sol = opti.solve();
+                u_opt = sol.value(U);
+                obj.last_u = u_opt;  % Store for warm start
+                u = u_opt(:,1);  % Return first control
+            catch
+                warning('NMPC optimization failed, using last solution');
+                u = obj.last_u(:,1);
+            end
         end
 
-        function [c, ceq] = cbfConstraints(obj, u_seq, x0, scan)
-            u_seq = reshape(u_seq, 2, obj.N)';
-
-            % Filter scan: valid readings within constraint range
-            valid = ~isnan(scan(:,1)) & scan(:,1) < obj.constraint_range;
-
-            % Downsample to reduce number of constraints
-            valid_idx = find(valid);
-            if isempty(valid_idx)
-                % No obstacles nearby - no constraints
-                c = [];
-                ceq = [];
-                return;
-            end
-
-            valid_idx = valid_idx(1:obj.scan_downsample:end);
-            ranges = scan(valid_idx, 1);
-            bearings = scan(valid_idx, 2);
-
-            c = [];
-
-            % Apply CBF constraint at each prediction step
-            x = x0;
-            for k = 1:obj.N
-                u = u_seq(k, :)';
-                v = u(1);
-                omega = u(2);
-
-                % Barrier function: h = range - d_safe
-                h = ranges - obj.d_safe;
-
-                % Time derivative of barrier function
-                % For static obstacles: range_dot = -v*cos(bearing) - range*omega*sin(bearing)
-                h_dot = -v * cos(bearings) - ranges .* omega .* sin(bearings);
-
-                % CBF constraint: h_dot + alpha*h >= 0
-                % Convert to c <= 0 format: -(h_dot + alpha*h) <= 0
-                c_k = -(h_dot + obj.alpha_cbf * h);
-
-                c = [c; c_k];
-
-                % Propagate dynamics for next step
-                x = x + obj.dt * [u(1)*cos(x(3)); u(1)*sin(x(3)); u(2)];
-            end
-
-            ceq = [];  % No equality constraints
+        function reset(obj)
+            obj.last_u = zeros(2, obj.N);
         end
     end
 end
