@@ -168,7 +168,10 @@ for step = 1:num_steps
     end
 
     if ~isempty(measurements)
-        ekf.update(measurements);
+        % Get IDs of visible beacons
+        visible_beacon_ids = find(in_range);
+        % Update with known landmark correspondences
+        ekf.update(measurements, visible_beacon_ids);
     end
 
     if step <= 5 || mod(step, 20) == 0
