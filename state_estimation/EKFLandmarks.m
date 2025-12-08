@@ -51,10 +51,51 @@ classdef EKFLandmarks < handle
             obj.P = A * obj.P * A' + W * obj.Q * W';
         end
 
+<<<<<<< ours
+        function update(obj, measurements, landmark_ids)
+||||||| ancestor
+        function update(obj, measurements)
+=======
         function update(obj, measurements, R)
+>>>>>>> theirs
             % update - EKF update step using landmark observations
+<<<<<<< ours
+            %
+            % Inputs:
+            %   measurements: Mx2 [range, bearing] or Mx1 [bearing] observations
+            %   landmark_ids: (optional) Mx1 vector of known landmark IDs
+            %                 If provided, skips data association
+
+            % Step 1: Data association (skip if IDs provided)
+            if nargin < 3 || isempty(landmark_ids)
+                % No IDs provided - perform data association
+                [matched_ids, matched_obs] = obj.associate_landmarks(measurements);
+            else
+                % IDs provided - use directly
+                matched_ids = landmark_ids(:);
+                matched_obs = measurements;
+            end
+
+            % If no landmarks matched, skip update
+            if isempty(matched_ids)
+                return;
+            end
+||||||| ancestor
+            %
+            % Inputs:
+            %   measurements: Mx2 [range, bearing] or Mx1 [bearing] observations
+
+            % Step 1: Data association
+            [matched_ids, matched_obs] = obj.associate_landmarks(measurements);
+
+            % If no landmarks matched, skip update
+            if isempty(matched_ids)
+                return;
+            end
+=======
             num_landmarks = size(obj.landmarks, 1);
             num_measurements = length(measurements);
+>>>>>>> theirs
 
             % Determine if we have range or bearing-only
             has_range = (num_measurements == 2 * num_landmarks);

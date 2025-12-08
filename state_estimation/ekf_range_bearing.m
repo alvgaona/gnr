@@ -130,11 +130,49 @@ for step = 1:num_steps
     true_measurements(1:2:end) = true_ranges;
     true_measurements(2:2:end) = relative_bearings;
 
+<<<<<<< ours
+    % Get IDs of visible beacons
+    visible_beacon_ids = find(in_range);
+
+    % Range and bearing measurements: [r1, phi1; r2, phi2; ...] for visible beacons only
+    % Structure as Mx2 matrix (M visible beacons, 2 measurements each)
+    if any(in_range)
+        measurements = [visible_ranges, visible_bearings];
+||||||| ancestor
+    % Range and bearing measurements: [r1, phi1; r2, phi2; ...] for visible beacons only
+    % Structure as Mx2 matrix (M visible beacons, 2 measurements each)
+    if any(in_range)
+        measurements = [visible_ranges, visible_bearings];
+=======
     % Add measurement noise (using pre-computed R_std)
     measurements = true_measurements + R_std .* randn(num_measurements, 1);
+>>>>>>> theirs
 
+<<<<<<< ours
+        % Add measurement noise (using pre-computed R_std)
+        measurements = measurements + randn(sum(in_range), 2) .* R_std';
+
+        % Normalize bearing angles to [-pi, pi]
+        measurements(:, 2) = atan2(sin(measurements(:, 2)), cos(measurements(:, 2)));
+    else
+        % No beacons visible
+        measurements = [];
+        visible_beacon_ids = [];
+    end
+||||||| ancestor
+        % Add measurement noise (using pre-computed R_std)
+        measurements = measurements + randn(sum(in_range), 2) .* R_std';
+
+        % Normalize bearing angles to [-pi, pi]
+        measurements(:, 2) = atan2(sin(measurements(:, 2)), cos(measurements(:, 2)));
+    else
+        % No beacons visible
+        measurements = [];
+    end
+=======
     % Normalize bearing angles to [-pi, pi]
     measurements(2:2:end) = atan2(sin(measurements(2:2:end)), cos(measurements(2:2:end)));
+>>>>>>> theirs
 
     %% EKF PREDICTION STEP
     % Control input: u = [Δd, Δβ]
@@ -145,7 +183,48 @@ for step = 1:num_steps
     ekf.predict(delta_d_hat, delta_beta_hat);
 
     %% EKF UPDATE STEP
+<<<<<<< ours
+    % Debug output for first few steps
+    if step <= 5 || mod(step, 20) == 0
+        fprintf('\n--- Step %d ---\n', step);
+        fprintf('True position: [%.2f, %.2f, %.1f deg]\n', ...
+                true_state(1), true_state(2), rad2deg(true_state(3)));
+        fprintf('Est. position (before update): [%.2f, %.2f, %.1f deg]\n', ...
+                ekf.x(1), ekf.x(2), rad2deg(ekf.x(3)));
+        fprintf('Beacons in range: %d/%d\n', sum(in_range), num_beacons);
+    end
+
+    if ~isempty(measurements)
+        % Pass known beacon IDs to skip data association
+        ekf.update(measurements, visible_beacon_ids);
+    end
+
+    if step <= 5 || mod(step, 20) == 0
+        fprintf('Est. position (after update):  [%.2f, %.2f, %.1f deg]\n', ...
+                ekf.x(1), ekf.x(2), rad2deg(ekf.x(3)));
+    end
+||||||| ancestor
+    % Debug output for first few steps
+    if step <= 5 || mod(step, 20) == 0
+        fprintf('\n--- Step %d ---\n', step);
+        fprintf('True position: [%.2f, %.2f, %.1f deg]\n', ...
+                true_state(1), true_state(2), rad2deg(true_state(3)));
+        fprintf('Est. position (before update): [%.2f, %.2f, %.1f deg]\n', ...
+                ekf.x(1), ekf.x(2), rad2deg(ekf.x(3)));
+        fprintf('Beacons in range: %d/%d\n', sum(in_range), num_beacons);
+    end
+
+    if ~isempty(measurements)
+        ekf.update(measurements);
+    end
+
+    if step <= 5 || mod(step, 20) == 0
+        fprintf('Est. position (after update):  [%.2f, %.2f, %.1f deg]\n', ...
+                ekf.x(1), ekf.x(2), rad2deg(ekf.x(3)));
+    end
+=======
     ekf.update(measurements, R);
+>>>>>>> theirs
 
     %% Store Results
     estimated_trajectory(:, step) = ekf.x;
