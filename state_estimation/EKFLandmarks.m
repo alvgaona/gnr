@@ -144,18 +144,25 @@ classdef EKFLandmarks < handle
             obj.P = A * obj.P * A' + W * obj.Q * W';
         end
 
-        function update(obj, measurements)
+        function update(obj, measurements, landmark_ids)
             % update - EKF update step using landmark observations
             %
             % Inputs:
             %   measurements: Mx2 [range, bearing] or Mx1 [bearing] observations
+            %   landmark_ids: Mx1 vector of known landmark IDs (optional)
 
-            % Step 1: Data association
-            [matched_ids, matched_obs] = obj.associate_landmarks(measurements);
+            % Step 1: Data association (if IDs not provided)
+            if nargin < 3 || isempty(landmark_ids)
+                [matched_ids, matched_obs] = obj.associate_landmarks(measurements);
 
-            % If no landmarks matched, skip update
-            if isempty(matched_ids)
-                return;
+                % If no landmarks matched, skip update
+                if isempty(matched_ids)
+                    return;
+                end
+            else
+                % IDs provided, use measurements directly
+                matched_ids = landmark_ids(:);
+                matched_obs = measurements;
             end
 
             % Determine if we have range or bearing-only
