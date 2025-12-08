@@ -19,6 +19,8 @@ classdef NMPCCBFController < handle
         alpha_cbf       % CBF aggressiveness parameter
         scan_downsample % Downsample factor for scan constraints
         constraint_range % Maximum range for CBF constraints [m]
+        slack_penalty   % Penalty weight for constraint violations
+        use_slack       % Enable slack variables for soft constraints
 
         % CasADi/IPOPT settings
         solver_options  % IPOPT options
@@ -43,6 +45,8 @@ classdef NMPCCBFController < handle
                 options.ScanDownsample (1,1) double {mustBePositive, mustBeInteger} = 50
                 options.ConstraintRange (1,1) double {mustBePositive} = 2.0
                 options.MaxIterations (1,1) double {mustBePositive} = 100
+                options.UseSlack (1,1) logical = false
+                options.SlackPenalty (1,1) double {mustBePositive} = 1000
             end
 
             obj.N = options.HorizonLength;
@@ -59,7 +63,8 @@ classdef NMPCCBFController < handle
             obj.alpha_cbf = options.AlphaCBF;
             obj.scan_downsample = options.ScanDownsample;
             obj.constraint_range = options.ConstraintRange;
-            obj.max_iterations = options.MaxIterations;
+            obj.use_slack = options.UseSlack;
+            obj.slack_penalty = options.SlackPenalty;
 
             % Configure IPOPT solver options
             obj.solver_options = struct();
@@ -129,18 +134,50 @@ classdef NMPCCBFController < handle
 
             % CBF constraints
             if n_obstacles > 0
-                for k = 1:obj.N
-                    v = U(1,k);
-                    omega = U(2,k);
+                if obj.use_slack
+                    % Create slack variables for soft constraints
+                    % One slack per obstacle per time step
+                    S = opti.variable(n_obstacles, obj.N);
 
-                    % Barrier function: h = range - d_safe
-                    h = ranges - obj.d_safe;
+                    % Slack must be non-negative (element-wise)
+                    for i = 1:n_obstacles
+                        for k = 1:obj.N
+                            opti.subject_to(S(i,k) >= 0);
+                        end
+                    end
 
-                    % Time derivative of barrier function
-                    h_dot = -v * cos(bearings) - ranges .* omega .* sin(bearings);
+                    for k = 1:obj.N
+                        v = U(1,k);
+                        omega = U(2,k);
 
-                    % CBF constraint: h_dot + alpha*h >= 0
-                    opti.subject_to(h_dot + obj.alpha_cbf * h >= 0);
+                        % Barrier function: h = range - d_safe
+                        h = ranges - obj.d_safe;
+
+                        % Time derivative of barrier function
+                        h_dot = -v * cos(bearings) - ranges .* omega .* sin(bearings);
+
+                        % Soft CBF constraint: h_dot + alpha*h + slack >= 0 (element-wise)
+                        for i = 1:n_obstacles
+                            opti.subject_to(h_dot(i) + obj.alpha_cbf * h(i) + S(i,k) >= 0);
+                        end
+                    end
+                else
+                    % Hard constraints (original formulation)
+                    for k = 1:obj.N
+                        v = U(1,k);
+                        omega = U(2,k);
+
+                        % Barrier function: h = range - d_safe
+                        h = ranges - obj.d_safe;
+
+                        % Time derivative of barrier function
+                        h_dot = -v * cos(bearings) - ranges .* omega .* sin(bearings);
+
+                        % CBF constraint: h_dot + alpha*h >= 0 (element-wise)
+                        for i = 1:n_obstacles
+                            opti.subject_to(h_dot(i) + obj.alpha_cbf * h(i) >= 0);
+                        end
+                    end
                 end
             end
 
@@ -153,6 +190,12 @@ classdef NMPCCBFController < handle
 
                 % Control effort
                 cost = cost + U(:,k)' * obj.R * U(:,k);
+            end
+
+            % Add slack penalty to cost if using soft constraints
+            if n_obstacles > 0 && obj.use_slack
+                % Penalize constraint violations (sum of all slacks)
+                cost = cost + obj.slack_penalty * sum(sum(S.^2));
             end
 
             % Terminal cost
