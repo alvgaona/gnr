@@ -59,25 +59,6 @@ theta_ref = zeros(size(t));%pi/2 * ones(size(t));    % Point upward (90 degrees)
 
 xref = [x_ref', y_ref', theta_ref'];
 
-%% Beacon Positions
-num_beacons = size(WorldXML.World.LandMark,2);
-if num_beacons == 0
-    beacons = [
-        4  8 1;   % Beacon 1
-        1  1 2;   % Beacon 2
-       11  3 3   % Beacon 3
-    ];
-    num_beacons=size(beacons, 1);
-else %Get beacon positions from file
-    beacons = zeros(num_beacons,3);
-    for i=1:num_beacons
-        coords = split(extractBetween(WorldXML.World.LandMark(i).position,"{","}"),",");
-        beacons(i,:) = [coords(1) coords(2) WorldXML.World.LandMark(i).mark_idAttribute];
-    end
-end
-beacons = sortrows(beacons,3); %make index in array coincide with landmark index
-num_measurements = 2 * num_beacons;  % Range + bearing per beacon
-
 %% Initial Conditions
 
 % Initial state
@@ -89,19 +70,6 @@ apoloLoc = apoloGetLocationMRobot(robotName);%[x y z theta]
 true_state = [apoloLoc(1);apoloLoc(2);apoloLoc(4)];%[x y theta]
 apoloResetOdometry(robotName,true_state');
 apoloUpdate();
-
-%% Get LiDAR scan
-scan = apoloGetLaserData(laserName);%lms_scan_new(x, obstacles, max_range, noise_std, lidar_model);
-b=size(scan);                 %LMS200->181 measures, last one is always 0, 180º
-ang = 0:b(2)-1;
-if b(2) > 181
-    ang = (ang-270)*(1.5*pi/b(2));
-else
-    scan = scan(1:180);
-    ang = 0:179;
-    ang = (ang-90)*(pi/b(2));
-end
-scan = [scan(:), ang(:)];
 
 % For EKF (in odometry space: Δd, Δβ)
 process_noise_d = 9.5003e-05;      % Distance increment noise [m]
@@ -167,18 +135,7 @@ for step = 1:num_steps
     true_state = [apoloLoc(1);apoloLoc(2);apoloLoc(4)];%[x y theta]
     true_trajectory(:, step) = true_state;
 
-    %% Get LiDAR scan
-    scan = apoloGetLaserData(laserName);%lms_scan_new(x, obstacles, max_range, noise_std, lidar_model);
-    b=size(scan);                 %LMS200->181 measures, last one is always 0, 180º
-    ang = 0:b(2)-1;
-    if b(2) > 181
-        ang = (ang-270)*(1.5*pi/b(2));
-    else
-	    scan = scan(1:180);
-        ang = 0:179;
-        ang = (ang-90)*(pi/b(2));
-    end
-    scan = [scan(:), ang(:)];
+    scan = getLaserScan(laserName);
 
     %% EKF PREDICTION STEP
     % Control input: u = [Δd, Δβ]
@@ -186,11 +143,11 @@ for step = 1:num_steps
     
     ekf.predict(delta_d_hat, delta_beta_hat);
 
-    odometryState = apoloGetOdometry(robotName);
-
     %% EKF UPDATE STEP - Vectorized
     % Lines are observed in the Hessse form
-    lines_observed = ransac_lines(scan, 0.02, 5);  
+    lines_observed = ransac_lines(scan, 0.015, 3);  
+    
+    %fprintf('[DEBUG]: %d lines_observed \r',size(lines_observed,1));
 
     ekf.update(lines_observed);
 
@@ -218,10 +175,9 @@ hold on; grid on; axis equal;
 plot(true_trajectory(1,:), true_trajectory(2,:), 'b-', 'LineWidth', 2, 'DisplayName', 'True');
 plot(estimated_trajectory(1,:), estimated_trajectory(2,:), 'r--', 'LineWidth', 2, 'DisplayName', 'Estimated');
 plot(true_trajectory(1,1), true_trajectory(2,1), 'go', 'MarkerSize', 12, 'MarkerFaceColor', 'g');
-plot(beacons(:,1), beacons(:,2), 'ks', 'MarkerSize', 15, 'MarkerFaceColor', 'k', 'DisplayName', 'Beacons');
 xlabel('X [m]'); ylabel('Y [m]');
 title('Trajectory');
-legend('Ground truth', 'Estimated', 'Initial Position', 'Beacons', 'Location', 'best');
+legend('Ground truth', 'Estimated', 'Initial Position', 'Location', 'best');
 
 % Plot 2: X Position
 subplot(2,3,2);
@@ -269,20 +225,19 @@ figure("Name","Trajectories");
 hold on; grid on; axis equal;
 show(map);
 plot(traj(:,1), traj(:,2), ':pentagramy', 'LineWidth', 2, 'DisplayName', 'Planned');
+plot(traj(pathPoint,1), traj(pathPoint,2), ':pentagramr', 'LineWidth', 2, 'DisplayName', 'Planned');
 plot(true_trajectory(1,:), true_trajectory(2,:), 'b-', 'LineWidth', 2, 'DisplayName', 'True');
 plot(estimated_trajectory(1,:), estimated_trajectory(2,:), 'r--', 'LineWidth', 2, 'DisplayName', 'Estimated');
 plot(true_trajectory(1,1), true_trajectory(2,1), 'ko', 'MarkerSize', 12, 'MarkerFaceColor', 'r');
-plot(beacons(:,1), beacons(:,2), 'ms', 'MarkerSize', 15, 'MarkerFaceColor', 'm', 'DisplayName', 'Beacons');
 plot(waypoints(:,1), waypoints(:,2), 'ko', 'MarkerSize', 12, 'MarkerFaceColor', 'cyan');
 xlabel('X [m]'); ylabel('Y [m]');
 title('Trajectory');
-legend('Planned', 'Ground truth', 'Estimated', 'Initial Position', 'Beacons', 'Waypoints', 'Location', 'best');
+legend('Planned', 'pathPoint', 'Ground truth', 'Estimated', 'Initial Position', 'Waypoints', 'Location', 'best');
 
 %% Display Statistics
 fprintf('\n========== EKF with range+bearing measurements - Results ==========\n');
 fprintf('True Dynamics:          Differential Drive [v, ω]\n');
 fprintf('EKF Control Input:      Odometry [Δd, Δβ]\n');
-fprintf('Measurement Model:      Range + Bearing to %d beacons\n', num_beacons);
 fprintf('Time Step:              %.2f s\n', time_step);
 fprintf('Simulation Time:        %.2f s\n', simulation_time);
 fprintf('Number of Steps:        %d\n', num_steps);
@@ -295,3 +250,18 @@ fprintf('\nFinal Std Dev (x):      %.4f m\n', sqrt(variance_history(1,end)));
 fprintf('Final Std Dev (y):      %.4f m\n', sqrt(variance_history(2,end)));
 fprintf('Final Std Dev (theta):  %.4f rad\n', sqrt(variance_history(3,end)));
 fprintf('=================================================================\n\n');
+
+function [scan] = getLaserScan(laserName)
+    %% Get LiDAR scan
+    scan = apoloGetLaserData(laserName);%lms_scan_new(x, obstacles, max_range, noise_std, lidar_model);
+    b=size(scan);                 %LMS200->181 measures, last one is always 0, 180º
+    ang = 0:b(2)-1;
+    if b(2) > 181
+        ang = (ang-270)*(1.5*pi/b(2));
+    else
+	    scan = scan(1:180);
+        ang = 0:179;
+        ang = (ang-90)*(pi/b(2));
+    end
+    scan = [scan(:), ang(:)];
+end
