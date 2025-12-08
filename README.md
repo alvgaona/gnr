@@ -1,26 +1,42 @@
-# Guiado y Navegación de Robots
-This repository contains all the code developed for the group assignment in the 'Guiado y Navegación de Robots' subject. It was bounded to the [Apolo simulator](https://github.com/mhernando/Apolo).
+# Maze Runner: A Differential Mobile Robot for Maze Navigation
 
-# Requirements
-- MATLAB (tested on R2023b)
-- [Apolo](https://github.com/mhernando/Apolo) for any scripts under the [apolo](/apolo) and [calibration](/calibration) folder, as they make calls to the simulator.
+## Prerequisites
 
-# Run the mobile robot sim
-1. Open Apolo and the map you want to test the algorithm on ([this one](/apolo/world/MazeRunner.mwf) is recommended)
-2. Open MATLAB and add the MATLAB folder under your Apolo installation to the path
-3. Add [apolo](/apolo), [control](/control) and [planning](/planning) to the MATLAB path also
-4. Run [`apolo_full.m`](/apolo/apolo_full.m). The default parameters should work fine, but most configurable ones are at the top of the script
-> [!TIP]
-> The trajectory the robot will try to follow can be defined in the map file, but to be able to read it in MATLAB, the world needs to be in XML format. Apolo can also load worlds in XML, but for our maps, collisions with meshparts stop working. To define a trajectory in a map:
-> 1. Create two cylinders, named START and STOP
-> 2. (Optional) Create as many other cylinders, that will define midpoints, as you want, and call them WAYPOINT1, WAYPOINT2, etc.
-> 2. Change their position and yaw to define points in the trajectory
-> 3. Change their height so the robot wont collide with them during simulation
-> 4. Save the world in Apolo, by clicking File->Save World XML
-> 5. Pass this file to the `maze_planner` in [`apolo_full.m`](/apolo/apolo_full.m)
+- MATLAB (>=R2023b)
+- [CasAdi for MATLAB](https://github.com/casadi/casadi/releases/tag/3.7.2)
+- [Apolo](https://github.com/mhernando/Apolo) for any scripts under the [apolo](/apolo)
+folder, as these are integrated with the simulator.
 
-# Authors
+## Usage
 
-- **Alvaro J. Gaona** - [@alvgaona](https://github.com/alvgaona)
-- **Lucas Gomez-Velayos** - [@Pigamer37](https://github.com/Pigamer37)
-- **Peter Pasuy-Quevedo** - [@peter2395](https://github.com/peter2395)
+Maze Runnner can be simulated with a Apolo (3D simulator) or standalone MATLAB with fewer capabilities.
+
+### Apolo and MATLAB
+
+The very first thing to do is to pull up Apolo.
+Opening the desired world is necessary for the MATLAB scripts to integrate with it.
+The recommended Apolo world is [`MazeRunner.mwf`](apolo/world/MazeRunner.mwf).
+A maze (garden) and the mobile robot should be visible and placed correctly.
+
+At this point, MATLAB is the second part of this.
+All scripts and algorithms that interact directly with Apolo are in the `apolo/` directory of the project.
+It leverages other modules, e.g., control, dynamics, planning; these modules can be used without Apolo.
+The entry point of this simulation should be [`apolo_full.m`](apolo/apolo_full.m), which connects
+everything and even shows visual plots related to the simulation.
+It has several parameters but most of the default ones should work out of the box.
+
+### Standalone MATLAB
+
+Standalone scripts are simulations based entirely on MATLAB.
+These scripts are essentially built to tests algorithms and integrations without relying on Apolo.
+The nonlinear MPC is mostly implemented in CasAdi so the folder downloaded from [casadi/casadi](https://github.com/casadi/casadi) release needs to be added to the MATLAB path.
+
+- [`ekf_lines.m`](standalone/ekf_lines.m): runs an EKF with RANSAC line extraction.
+- [`ekf_range_bearing.m`](standalone/ekf_range_bearing.m): runs an EKF with landmarks (range and bearing model).
+- [`nmpc_trajectory.m`](standalone/nmpc_trajectory.m): runs a nonlinear MPC trajectory tracker.
+- [`nmpc_cbf_corridor.m`](standalone/nmpc_cbf_corridor.m): runs a nonlinear MPC trajectory tracker with Control Barrier Functions (CBF) for obstacle avoidance.
+- [`nmpc_cbf_ekf_lines_corridor.m`](standalone/nmpc_cbf_ekf_lines_corridor.m): runs a nonlinear MPC trajectory tracker with obstacle avoidance and EKF lines.
+- [`nmpc_cbf_ekf_lines.m`](standalone/nmpc_cbf_ekf_lines.m): runs a nonlinear MPC with an EKF lines on a full and long trajectory.
+- [`nmpc_cbf_ekf_range_brearing.m`](standalone/nmpc_cbf_ekf_range_bearing.m): runs a nonlinear MPC with an EKF range and bearing on a full and long trajectory.
+- [`garden_extract_lines.m`](standalone/garden_extract_lines.m): extract lines from an occupancy grid map in Hesse form.
+- [`pid_trajectory.m`](standalone/pid_trajectory.m): runs a PID trajectory tracker.
