@@ -6,8 +6,8 @@ trajectories = load('trayectorias.mat');
 traj = trajectories.trajFull;
 
 %% Simulation Parameters
-dt = 0.02;                  % Simulation/EKF time step [s] - 50 Hz
-control_dt = 0.05;          % Control time step [s] - 20 Hz
+dt = 0.04;                  % Simulation/EKF time step [s]
+control_dt = 0.1;          % Control time step [s]
 control_rate = control_dt / dt;
 
 %% Beacon Positions
@@ -46,7 +46,7 @@ num_beacons = size(beacons, 1);
 % Range and bearing measurements
 measurement_noise_range = 0.018085189925279;    % Range noise [m]
 measurement_noise_bearing = 0.023174091647608;  % Bearing noise [rad]
-max_detection_range = 30.0;                     % Max sensor range [m]
+max_detection_range = 10.0;                     % Max sensor range [m]
 R = diag([measurement_noise_range^2, measurement_noise_bearing^2]);
 
 % LiDAR Scanner (for obstacle detection)
@@ -130,7 +130,7 @@ fprintf('Starting NMPC+CBF+EKF simulation with Range+Bearing...\n');
 fprintf('Reference trajectory: %d points, %.1f m length\n', size(traj, 1), traj_length);
 fprintf('Beacons: %d\n', num_beacons);
 fprintf('Simulation time: %.1f s\n', Tsim);
-fprintf('Simulation: 50 Hz, Control: 20 Hz, EKF: 50 Hz\n\n');
+fprintf('Simulation: %d Hz, Control: %d Hz, EKF: %d Hz\n\n', 1/dt, 1/control_dt, 1/dt);
 
 x_true = x0_true;
 u_current = [0; 0];
@@ -260,7 +260,7 @@ xlabel('$x$ [m]', 'Interpreter', 'latex');
 ylabel('$y$ [m]', 'Interpreter', 'latex');
 title('Trajectory Tracking with Range+Bearing EKF', 'Interpreter', 'latex');
 legend('Interpreter', 'latex', 'Location', 'best');
-xlim([0 60])
+xlim([0 30])
 ylim([0 60])
 
 %% 2. Position Estimation Error
@@ -391,7 +391,7 @@ for k = 1:animation_step:num_steps
     set(h_cov_theta, 'XData', t(1:k), 'YData', rad2deg(covariance_history(3, 1:k)));
 
     drawnow('limitrate');
-    pause(0.001);
+    pause(0.01);
 end
 
 figure(fig_animation);
