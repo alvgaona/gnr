@@ -194,7 +194,7 @@ angle_error = abs(true_trajectory(3,:) - estimated_trajectory(3,:));
 %% TODO: Compute Tracking Error
 
 %% Visualization
-figure('Name', 'Multi-Rate EKF with Range+Bearing Measurements', 'Position', [50 50 1400 900]);
+figure('Name', 'Maze Solver Full Stack', 'Position', [50 50 1400 900]);
 
 % Plot 1: 2D Trajectory with Beacons
 subplot(2,3,1);
