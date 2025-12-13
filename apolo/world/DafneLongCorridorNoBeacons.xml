@@ -99,7 +99,7 @@
 					{1.5708,0,0}
 				</orientation>
 				<position>
-					{-20,4,0}
+					{-20,6,0}
 				</position>
 			</face>
 		</FaceSetPart>
@@ -127,7 +127,7 @@
 		</LMS100Sim>
 		<LMS200Sim name="LMS200" id="4" linkTo="$Dafne$">
 			<position>
-				{0.1,0,0.4}
+				{0.1,0,1}
 			</position>
 			<colour r="0" g="1" b="0"/>
 		</LMS200Sim>
@@ -136,7 +136,7 @@
 				{0,0,0.785398}
 			</orientation>
 			<position>
-				{8,2,0}
+				{8,2,3}
 			</position>
 			<face>
 				<vertex>
